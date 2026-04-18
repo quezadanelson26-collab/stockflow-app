@@ -8,15 +8,25 @@ interface InventoryLevel { quantity_on_hand: number; store_id: string; }
 interface Variant { id: string; sku: string; inventory_levels: InventoryLevel[]; }
 interface Product {
   id: string; title: string; vendor: string; product_type: string;
-  is_active: boolean; product_variants: Variant[];
+  shopify_status: string; product_variants: Variant[];
 }
+
+const statusBadge = (status: string) => {
+  switch (status) {
+    case 'active': return 'bg-green-100 text-green-700';
+    case 'draft': return 'bg-yellow-100 text-yellow-700';
+    case 'archived': return 'bg-red-100 text-red-700';
+    default: return 'bg-gray-100 text-gray-700';
+  }
+};
 
 export default function ProductsClient({
   initialProducts, initialStores,
 }: { initialProducts: Product[]; initialStores: Store[] }) {
   const [search, setSearch] = useState('');
   const [vendorFilter, setVendorFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [shopifyStatusFilter, setShopifyStatusFilter] = useState('');
+  const [stockFilter, setStockFilter] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
 
   const vendors = Array.from(
@@ -44,11 +54,13 @@ export default function ProductsClient({
       p.product_type?.toLowerCase().includes(q) ||
       p.product_variants?.some((v) => v.sku?.toLowerCase().includes(q));
     const matchesVendor = !vendorFilter || p.vendor === vendorFilter;
-    const matchesStatus = !statusFilter ||
-      (statusFilter === 'active' && p.is_active) ||
-      (statusFilter === 'inactive' && !p.is_active);
+    const matchesShopifyStatus = !shopifyStatusFilter || p.shopify_status === shopifyStatusFilter;
+    const total = getTotalStock(p);
+    const matchesStock = !stockFilter ||
+      (stockFilter === 'in_stock' && total > 0) ||
+      (stockFilter === 'out_of_stock' && total === 0);
     const matchesStore = !storeFilter || getStoreStock(p, storeFilter) > 0;
-    return matchesSearch && matchesVendor && matchesStatus && matchesStore;
+    return matchesSearch && matchesVendor && matchesShopifyStatus && matchesStock && matchesStore;
   });
 
   return (
@@ -66,11 +78,18 @@ export default function ProductsClient({
           <option value="">All Designers</option>
           {vendors.sort().map((v) => (<option key={v} value={v}>{v}</option>))}
         </select>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+        <select value={shopifyStatusFilter} onChange={(e) => setShopifyStatusFilter(e.target.value)}
           className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">All Status</option>
+          <option value="">All Shopify Status</option>
           <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
+          <option value="draft">Draft</option>
+          <option value="archived">Archived</option>
+        </select>
+        <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value)}
+          className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All Stock</option>
+          <option value="in_stock">Has Stock</option>
+          <option value="out_of_stock">Out of Stock</option>
         </select>
         <select value={storeFilter} onChange={(e) => setStoreFilter(e.target.value)}
           className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -87,7 +106,7 @@ export default function ProductsClient({
               <th className="text-left px-4 py-3 font-semibold text-gray-600">Product</th>
               <th className="text-left px-4 py-3 font-semibold text-gray-600">Designer</th>
               <th className="text-left px-4 py-3 font-semibold text-gray-600">Type</th>
-              <th className="text-center px-4 py-3 font-semibold text-gray-600">Status</th>
+              <th className="text-center px-4 py-3 font-semibold text-gray-600">Shopify</th>
               {initialStores.map((store) => (
                 <th key={store.id} className={`text-center px-4 py-3 font-semibold ${storeFilter === store.id ? 'text-blue-700 bg-blue-50' : 'text-gray-600'}`}>{store.name}</th>
               ))}
@@ -95,24 +114,31 @@ export default function ProductsClient({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((product) => (
-              <tr key={product.id} className="border-b border-gray-100 hover:bg-gray-50">
-                <td className="px-4 py-3">
-                  <Link href={`/dashboard/products/${product.id}`} className="text-blue-600 hover:underline font-medium">{product.title}</Link>
-                </td>
-                <td className="px-4 py-3 text-gray-600">{product.vendor}</td>
-                <td className="px-4 py-3 text-gray-600">{product.product_type}</td>
-                <td className="px-4 py-3 text-center">
-                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${product.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {product.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-                {initialStores.map((store) => (
-                  <td key={store.id} className={`px-4 py-3 text-center font-mono ${storeFilter === store.id ? 'text-blue-700 font-bold bg-blue-50' : 'text-gray-700'}`}>{getStoreStock(product, store.id)}</td>
-                ))}
-                <td className="px-4 py-3 text-center font-bold font-mono text-gray-900">{getTotalStock(product)}</td>
-              </tr>
-            ))}
+            {filtered.map((product) => {
+              const total = getTotalStock(product);
+              const isAttention = product.shopify_status === 'archived' && total > 0;
+              return (
+                <tr key={product.id} className={`border-b border-gray-100 hover:bg-gray-50 ${isAttention ? 'bg-amber-50' : ''}`}>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Link href={`/dashboard/products/${product.id}`} className="text-blue-600 hover:underline font-medium">{product.title}</Link>
+                      {isAttention && <span title="Archived but has stock — needs reactivation">⚠️</span>}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{product.vendor}</td>
+                  <td className="px-4 py-3 text-gray-600">{product.product_type}</td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium capitalize ${statusBadge(product.shopify_status)}`}>
+                      {product.shopify_status}
+                    </span>
+                  </td>
+                  {initialStores.map((store) => (
+                    <td key={store.id} className={`px-4 py-3 text-center font-mono ${storeFilter === store.id ? 'text-blue-700 font-bold bg-blue-50' : 'text-gray-700'}`}>{getStoreStock(product, store.id)}</td>
+                  ))}
+                  <td className="px-4 py-3 text-center font-bold font-mono text-gray-900">{total}</td>
+                </tr>
+              );
+            })}
             {filtered.length === 0 && (
               <tr><td colSpan={5 + initialStores.length} className="px-4 py-8 text-center text-gray-400">No products found</td></tr>
             )}
