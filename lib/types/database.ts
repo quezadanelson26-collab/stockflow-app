@@ -1,3 +1,5 @@
+// StockFlow v2 — Database type definitions
+
 export interface Product {
   id: string;
   tenant_id: string;
@@ -5,12 +7,10 @@ export interface Product {
   title: string;
   vendor: string | null;
   product_type: string | null;
-  status: string;
+  status: 'active' | 'draft' | 'archived';
   image_url: string | null;
-  tags: string[] | null;
   created_at: string;
   updated_at: string;
-  product_variants?: ProductVariant[];
 }
 
 export interface ProductVariant {
@@ -23,10 +23,10 @@ export interface ProductVariant {
   barcode: string | null;
   wholesale_price: number | null;
   retail_price: number | null;
-  position: number;
+  size: string | null;
+  color: string | null;
   created_at: string;
   updated_at: string;
-  inventory_levels?: InventoryLevel[];
 }
 
 export interface InventoryLevel {
@@ -34,8 +34,15 @@ export interface InventoryLevel {
   tenant_id: string;
   variant_id: string;
   store_id: string;
-  on_hand: number;
-  committed: number;
-  available: number;
+  quantity_on_hand: number;
+  quantity_committed: number;
+  quantity_available: number;
+  reorder_point: number | null;
   updated_at: string;
+}
+
+export interface ProductWithVariants extends Product {
+  product_variants: (ProductVariant & {
+    inventory_levels: InventoryLevel[];
+  })[];
 }
