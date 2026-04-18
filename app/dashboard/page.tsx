@@ -10,7 +10,7 @@ export default async function DashboardPage() {
   ] = await Promise.all([
     supabase.from('products').select('*', { count: 'exact', head: true }),
     supabase.from('product_variants').select('*', { count: 'exact', head: true }),
-    supabase.from('products').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('products').select('*', { count: 'exact', head: true }).eq('is_active', true),
   ]);
 
   const stats = [
