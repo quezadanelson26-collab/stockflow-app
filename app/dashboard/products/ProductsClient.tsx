@@ -25,7 +25,9 @@ export default function ProductsClient({ products }: { products: ProductWithVari
           v.barcode?.toLowerCase().includes(q)
         );
       const matchesDesigner = designerFilter === 'all' || p.vendor === designerFilter;
-      const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
+      const matchesStatus = statusFilter === 'all' ||
+        (statusFilter === 'active' && p.is_active) ||
+        (statusFilter === 'inactive' && !p.is_active);
       return matchesSearch && matchesDesigner && matchesStatus;
     });
   }, [products, search, designerFilter, statusFilter]);
@@ -38,7 +40,7 @@ export default function ProductsClient({ products }: { products: ProductWithVari
 
   const getPriceRange = (product: ProductWithVariants) => {
     const prices = product.product_variants
-      .map(v => v.retail_price)
+      .map(v => v.price)
       .filter((p): p is number => p !== null);
     if (prices.length === 0) return '—';
     const min = Math.min(...prices);
@@ -50,15 +52,6 @@ export default function ProductsClient({ products }: { products: ProductWithVari
     if (stock === 0) return 'text-red-600 bg-red-50';
     if (stock <= 3) return 'text-amber-600 bg-amber-50';
     return 'text-green-600 bg-green-50';
-  };
-
-  const statusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'bg-green-100 text-green-700';
-      case 'draft': return 'bg-yellow-100 text-yellow-700';
-      case 'archived': return 'bg-gray-100 text-gray-500';
-      default: return 'bg-gray-100 text-gray-500';
-    }
   };
 
   return (
@@ -98,8 +91,7 @@ export default function ProductsClient({ products }: { products: ProductWithVari
           >
             <option value="all">All Statuses</option>
             <option value="active">Active</option>
-            <option value="draft">Draft</option>
-            <option value="archived">Archived</option>
+            <option value="inactive">Inactive</option>
           </select>
         </div>
       </div>
@@ -140,8 +132,10 @@ export default function ProductsClient({ products }: { products: ProductWithVari
                     </span>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${statusColor(product.status)}`}>
-                      {product.status}
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      product.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {product.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </td>
                 </tr>
@@ -160,3 +154,4 @@ export default function ProductsClient({ products }: { products: ProductWithVari
     </div>
   );
 }
+
