@@ -1,30 +1,38 @@
 // StockFlow v2 — Database type definitions
+// Matches actual Supabase schema as of April 2026
 
 export interface Product {
   id: string;
   tenant_id: string;
-  shopify_product_id: string | null;
+  shopify_product_id: number | null;
   title: string;
   vendor: string | null;
   product_type: string | null;
-  status: 'active' | 'draft' | 'archived';
+  description: string | null;
   image_url: string | null;
+  tags: string[] | null;
+  is_active: boolean;
+  shopify_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface ProductVariant {
   id: string;
-  tenant_id: string;
   product_id: string;
-  shopify_variant_id: string | null;
-  title: string;
+  tenant_id: string;
+  shopify_variant_id: number | null;
   sku: string | null;
   barcode: string | null;
-  wholesale_price: number | null;
-  retail_price: number | null;
-  size: string | null;
-  color: string | null;
+  title: string;
+  option1: string | null;
+  option2: string | null;
+  option3: string | null;
+  price: number | null;
+  compare_at_price: number | null;
+  cost_price: number | null;
+  weight: number | null;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -32,12 +40,13 @@ export interface ProductVariant {
 export interface InventoryLevel {
   id: string;
   tenant_id: string;
-  variant_id: string;
   store_id: string;
+  product_variant_id: string;
   quantity_on_hand: number;
   quantity_committed: number;
   quantity_available: number;
-  reorder_point: number | null;
+  last_counted_at: string | null;
+  created_at: string;
   updated_at: string;
 }
 
