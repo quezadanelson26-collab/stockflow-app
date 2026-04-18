@@ -9,8 +9,9 @@ export default function ProductsClient({ products }: { products: ProductWithVari
   const [designerFilter, setDesignerFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const designers = useMemo(() => {
-    const unique = [...new Set(products.map(p => p.vendor).filter(Boolean))] as string[];
+  const designers = useMemo(() => {   
+    const unique = Array.from(new Set(products.map(p => p.vendor).filter(Boolean))) as string[];
+
     return unique.sort();
   }, [products]);
 
