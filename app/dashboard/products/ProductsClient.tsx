@@ -17,24 +17,11 @@ export default function ProductsClient({
   const [search, setSearch] = useState('');
   const [vendorFilter, setVendorFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [storeFilter, setStoreFilter] = useState('');
 
   const vendors = Array.from(
     new Set(initialProducts.map((p) => p.vendor).filter(Boolean))
   ) as string[];
-
-  const filtered = initialProducts.filter((p) => {
-    const q = search.toLowerCase();
-    const matchesSearch = !search ||
-      p.title.toLowerCase().includes(q) ||
-      p.vendor?.toLowerCase().includes(q) ||
-      p.product_type?.toLowerCase().includes(q) ||
-      p.product_variants?.some((v) => v.sku?.toLowerCase().includes(q));
-    const matchesVendor = !vendorFilter || p.vendor === vendorFilter;
-    const matchesStatus = !statusFilter ||
-      (statusFilter === 'active' && p.is_active) ||
-      (statusFilter === 'inactive' && !p.is_active);
-    return matchesSearch && matchesVendor && matchesStatus;
-  });
 
   const getStoreStock = (product: Product, storeId: string): number => {
     return product.product_variants?.reduce((sum, v) => {
@@ -48,6 +35,21 @@ export default function ProductsClient({
       return sum + (v.inventory_levels?.reduce((s, il) => s + (il.quantity_on_hand || 0), 0) || 0);
     }, 0) || 0;
   };
+
+  const filtered = initialProducts.filter((p) => {
+    const q = search.toLowerCase();
+    const matchesSearch = !search ||
+      p.title.toLowerCase().includes(q) ||
+      p.vendor?.toLowerCase().includes(q) ||
+      p.product_type?.toLowerCase().includes(q) ||
+      p.product_variants?.some((v) => v.sku?.toLowerCase().includes(q));
+    const matchesVendor = !vendorFilter || p.vendor === vendorFilter;
+    const matchesStatus = !statusFilter ||
+      (statusFilter === 'active' && p.is_active) ||
+      (statusFilter === 'inactive' && !p.is_active);
+    const matchesStore = !storeFilter || getStoreStock(p, storeFilter) > 0;
+    return matchesSearch && matchesVendor && matchesStatus && matchesStore;
+  });
 
   return (
     <div>
@@ -70,6 +72,13 @@ export default function ProductsClient({
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
+        <select value={storeFilter} onChange={(e) => setStoreFilter(e.target.value)}
+          className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All Locations</option>
+          {initialStores.map((store) => (
+            <option key={store.id} value={store.id}>{store.name}</option>
+          ))}
+        </select>
       </div>
       <div className="bg-white rounded-lg shadow overflow-x-auto">
         <table className="w-full text-sm">
@@ -80,7 +89,7 @@ export default function ProductsClient({
               <th className="text-left px-4 py-3 font-semibold text-gray-600">Type</th>
               <th className="text-center px-4 py-3 font-semibold text-gray-600">Status</th>
               {initialStores.map((store) => (
-                <th key={store.id} className="text-center px-4 py-3 font-semibold text-gray-600">{store.name}</th>
+                <th key={store.id} className={`text-center px-4 py-3 font-semibold ${storeFilter === store.id ? 'text-blue-700 bg-blue-50' : 'text-gray-600'}`}>{store.name}</th>
               ))}
               <th className="text-center px-4 py-3 font-semibold text-gray-600">Total Stock</th>
             </tr>
@@ -99,7 +108,7 @@ export default function ProductsClient({
                   </span>
                 </td>
                 {initialStores.map((store) => (
-                  <td key={store.id} className="px-4 py-3 text-center font-mono text-gray-700">{getStoreStock(product, store.id)}</td>
+                  <td key={store.id} className={`px-4 py-3 text-center font-mono ${storeFilter === store.id ? 'text-blue-700 font-bold bg-blue-50' : 'text-gray-700'}`}>{getStoreStock(product, store.id)}</td>
                 ))}
                 <td className="px-4 py-3 text-center font-bold font-mono text-gray-900">{getTotalStock(product)}</td>
               </tr>
