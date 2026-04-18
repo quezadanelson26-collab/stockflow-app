@@ -12,7 +12,7 @@ export default async function ProductsPage() {
   const { data: products } = await supabase
     .from('products')
     .select(`
-      id, title, vendor, product_type, is_active,
+      id, title, vendor, product_type, shopify_status,
       product_variants (
         id, sku,
         inventory_levels (
