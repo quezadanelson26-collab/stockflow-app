@@ -1,5 +1,4 @@
-import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
+import { createClient } from '@/lib/supabase/server';
 import Link from 'next/link';
 
 interface Store { id: string; name: string; }
@@ -14,8 +13,9 @@ interface Product {
   is_active: boolean; product_variants: Variant[];
 }
 
-export default async function ProductDetailPage({ params }: { params: { id: string } }) {
-  const supabase = createServerComponentClient({ cookies });
+export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createClient();
 
   const { data: stores } = await supabase.from('stores').select('id, name').order('name');
 
@@ -28,7 +28,7 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
         inventory_levels ( quantity_on_hand, quantity_committed, store_id )
       )
     `)
-    .eq('id', params.id)
+    .eq('id', id)
     .single();
 
   if (!product) {
