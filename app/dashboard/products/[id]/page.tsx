@@ -54,12 +54,10 @@ export default async function ProductDetailPage({
             <div className="flex items-center gap-4 mt-2">
               {p.vendor && <span className="text-sm text-gray-600">Designer: <strong>{p.vendor}</strong></span>}
               {p.product_type && <span className="text-sm text-gray-600">Type: <strong>{p.product_type}</strong></span>}
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${
-                p.status === 'active' ? 'bg-green-100 text-green-700' :
-                p.status === 'draft' ? 'bg-yellow-100 text-yellow-700' :
-                'bg-gray-100 text-gray-500'
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                p.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
               }`}>
-                {p.status}
+                {p.is_active ? 'Active' : 'Inactive'}
               </span>
             </div>
           </div>
@@ -84,10 +82,10 @@ export default async function ProductDetailPage({
               <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Variant</th>
               <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
               <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Barcode</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Color</th>
-              <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Wholesale</th>
-              <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Retail</th>
+              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Option 1</th>
+              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Option 2</th>
+              <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Cost</th>
+              <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
               <th className="text-center px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
             </tr>
           </thead>
@@ -99,13 +97,13 @@ export default async function ProductDetailPage({
                   <td className="px-6 py-3 text-sm font-medium text-gray-900">{v.title}</td>
                   <td className="px-6 py-3 text-sm text-gray-600 font-mono">{v.sku || '—'}</td>
                   <td className="px-6 py-3 text-sm text-gray-600 font-mono">{v.barcode || '—'}</td>
-                  <td className="px-6 py-3 text-sm text-gray-600">{v.size || '—'}</td>
-                  <td className="px-6 py-3 text-sm text-gray-600">{v.color || '—'}</td>
+                  <td className="px-6 py-3 text-sm text-gray-600">{v.option1 || '—'}</td>
+                  <td className="px-6 py-3 text-sm text-gray-600">{v.option2 || '—'}</td>
                   <td className="px-6 py-3 text-sm text-right text-gray-600">
-                    {v.wholesale_price ? `$${v.wholesale_price}` : '—'}
+                    {v.cost_price ? `$${v.cost_price}` : '—'}
                   </td>
                   <td className="px-6 py-3 text-sm text-right font-medium text-gray-900">
-                    {v.retail_price ? `$${v.retail_price}` : '—'}
+                    {v.price ? `$${v.price}` : '—'}
                   </td>
                   <td className="px-6 py-3 text-center">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStockColor(qty)}`}>
@@ -121,3 +119,4 @@ export default async function ProductDetailPage({
     </div>
   );
 }
+
