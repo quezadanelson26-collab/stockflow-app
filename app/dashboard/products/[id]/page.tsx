@@ -10,8 +10,17 @@ interface Variant {
 }
 interface Product {
   id: string; title: string; vendor: string; product_type: string;
-  is_active: boolean; product_variants: Variant[];
+  shopify_status: string; product_variants: Variant[];
 }
+
+const statusBadge = (status: string) => {
+  switch (status) {
+    case 'active': return 'bg-green-100 text-green-700';
+    case 'draft': return 'bg-yellow-100 text-yellow-700';
+    case 'archived': return 'bg-red-100 text-red-700';
+    default: return 'bg-gray-100 text-gray-700';
+  }
+};
 
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -22,7 +31,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const { data: product } = await supabase
     .from('products')
     .select(`
-      id, title, vendor, product_type, is_active,
+      id, title, vendor, product_type, shopify_status,
       product_variants (
         id, title, sku, barcode, cost_price, price, option1, option2,
         inventory_levels ( quantity_on_hand, quantity_committed, store_id )
@@ -54,6 +63,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const totalStock = product.product_variants?.reduce(
     (sum: number, v: Variant) => sum + getVarTotal(v), 0) || 0;
 
+  const isAttention = product.shopify_status === 'archived' && totalStock > 0;
+
   return (
     <div>
       <div className="mb-6">
@@ -63,10 +74,18 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <h1 className="text-2xl font-bold text-gray-900">{product.title}</h1>
             <p className="text-gray-500">{product.vendor} &middot; {product.product_type}</p>
           </div>
-          <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${product.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-            {product.is_active ? 'Active' : 'Inactive'}
+          <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium capitalize ${statusBadge(product.shopify_status)}`}>
+            {product.shopify_status}
           </span>
         </div>
+        {isAttention && (
+          <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 flex items-center gap-2">
+            <span className="text-lg">⚠️</span>
+            <p className="text-sm text-amber-800 font-medium">
+              This product is archived on Shopify but has {totalStock} unit{totalStock > 1 ? 's' : ''} in stock. Reactivate it on Shopify so it can sell.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
