@@ -63,6 +63,10 @@ export default function ProductsClient({
     return matchesSearch && matchesVendor && matchesShopifyStatus && matchesStock && matchesStore;
   });
 
+  const visibleStores = storeFilter
+    ? initialStores.filter((s) => s.id === storeFilter)
+    : initialStores;
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -107,7 +111,7 @@ export default function ProductsClient({
               <th className="text-left px-4 py-3 font-semibold text-gray-600">Designer</th>
               <th className="text-left px-4 py-3 font-semibold text-gray-600">Type</th>
               <th className="text-center px-4 py-3 font-semibold text-gray-600">Shopify</th>
-              {initialStores.map((store) => (
+              {visibleStores.map((store) => (
                 <th key={store.id} className={`text-center px-4 py-3 font-semibold ${storeFilter === store.id ? 'text-blue-700 bg-blue-50' : 'text-gray-600'}`}>{store.name}</th>
               ))}
               <th className="text-center px-4 py-3 font-semibold text-gray-600">Total Stock</th>
@@ -132,7 +136,7 @@ export default function ProductsClient({
                       {product.shopify_status}
                     </span>
                   </td>
-                  {initialStores.map((store) => (
+                  {visibleStores.map((store) => (
                     <td key={store.id} className={`px-4 py-3 text-center font-mono ${storeFilter === store.id ? 'text-blue-700 font-bold bg-blue-50' : 'text-gray-700'}`}>{getStoreStock(product, store.id)}</td>
                   ))}
                   <td className="px-4 py-3 text-center font-bold font-mono text-gray-900">{total}</td>
@@ -140,7 +144,7 @@ export default function ProductsClient({
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan={5 + initialStores.length} className="px-4 py-8 text-center text-gray-400">No products found</td></tr>
+              <tr><td colSpan={5 + visibleStores.length} className="px-4 py-8 text-center text-gray-400">No products found</td></tr>
             )}
           </tbody>
         </table>
