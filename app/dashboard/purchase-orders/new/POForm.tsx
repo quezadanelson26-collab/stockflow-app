@@ -11,7 +11,7 @@ type FormValues = z.infer<typeof createPurchaseOrderSchema>;
 
 export default function POForm() {
   const [lineItems, setLineItems] = useState<any[]>([]);
-
+  const [showPicker, setShowPicker] = useState(false); 
   const form = useForm<FormValues>({
     resolver: zodResolver(createPurchaseOrderSchema),
     defaultValues: {
