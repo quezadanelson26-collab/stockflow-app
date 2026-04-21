@@ -23,10 +23,18 @@ export default function POForm() {
     },
   });
 
-  const onSubmit = async (values: FormValues) => {
-    console.log('Submitting PO:', values);
-    // We will wire this to the server action in Step 3.5
-  };
+ const onSubmit = async (values: FormValues) => {
+  const formData = new FormData();
+
+  formData.append('store_id', values.store_id);
+  formData.append('vendor_name', values.vendor_name);
+  formData.append('expected_date', values.expected_date || '');
+  formData.append('notes', values.notes || '');
+  formData.append('line_items', JSON.stringify(values.line_items));
+
+  await createPurchaseOrderAction(formData);
+};
+
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
