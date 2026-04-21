@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { createPurchaseOrderSchema } from '@/schemas/purchaseOrders';
 import { z } from 'zod';
+import LineItemRow from './LineItemRow';
 
 type FormValues = z.infer<typeof createPurchaseOrderSchema>;
 
