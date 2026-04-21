@@ -77,7 +77,25 @@ export default function POForm() {
           <p className="text-sm text-gray-500">No line items added yet.</p>
         )}
 
-        {/* We will render LineItemRow components here in Step 3.3 */}
+        {lineItems.map((item, index) => (
+  <LineItemRow
+    key={index}
+    item={item}
+    index={index}
+    onChange={(i, field, value) => {
+      const updated = [...lineItems];
+      updated[i] = { ...updated[i], [field]: value };
+      setLineItems(updated);
+      form.setValue('line_items', updated);
+    }}
+    onRemove={(i) => {
+      const updated = lineItems.filter((_, idx) => idx !== i);
+      setLineItems(updated);
+      form.setValue('line_items', updated);
+    }}
+  />
+))}
+
       </div>
 
       {/* Submit */}
