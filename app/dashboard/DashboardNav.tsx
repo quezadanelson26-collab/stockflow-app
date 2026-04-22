@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 const navItems = [
   { name: 'Dashboard', href: '/dashboard', icon: '📊' },
   { name: 'Products', href: '/dashboard/products', icon: '👗' },
-  { name: 'Purchase Orders', href: '#', icon: '📋', soon: true },
+  { name: 'Purchase Orders', href: '/dashboard/purchase-orders', icon: '📋' },
   { name: 'Receiving', href: '#', icon: '📦', soon: true },
   { name: 'Cycle Counts', href: '#', icon: '🔍', soon: true },
   { name: 'Movement Ledger', href: '#', icon: '📒', soon: true },
