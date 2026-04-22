@@ -1,116 +1,128 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 
-interface Store { id: string; name: string; }
-interface POItem { id: string; quantity_ordered: number; quantity_received: number; cost_price: number; }
-interface PO {
-  id: string; po_number: string; vendor: string; destination_store_id: string;
-  status: string; order_date: string; expected_date: string; notes: string;
-  created_at: string; purchase_order_items: POItem[];
-}
-
-const statusBadge = (status: string) => {
-  switch (status) {
-    case 'draft': return 'bg-gray-100 text-gray-700';
-    case 'submitted': return 'bg-blue-100 text-blue-700';
-    case 'partially_received': return 'bg-yellow-100 text-yellow-700';
-    case 'received': return 'bg-green-100 text-green-700';
-    case 'closed': return 'bg-purple-100 text-purple-700';
-    default: return 'bg-gray-100 text-gray-700';
-  }
+type PurchaseOrder = {
+  id: string;
+  po_number: string;
+  vendor: string;
+  status: string;
+  total_cost: number;
+  total_items: number;
+  expected_date: string | null;
+  created_at: string;
 };
 
-const statusLabel = (status: string) => status.replace(/_/g, ' ');
+const statusColors: Record<string, string> = {
+  draft: 'bg-gray-100 text-gray-700',
+  submitted: 'bg-blue-100 text-blue-700',
+  partial: 'bg-yellow-100 text-yellow-700',
+  received: 'bg-green-100 text-green-700',
+  cancelled: 'bg-red-100 text-red-700',
+};
 
-export default function PurchaseOrdersClient({ initialPOs, initialStores }: { initialPOs: PO[]; initialStores: Store[] }) {
-  const [statusFilter, setStatusFilter] = useState('');
-  const [vendorFilter, setVendorFilter] = useState('');
-  const [storeFilter, setStoreFilter] = useState('');
+export default function PurchaseOrdersClient() {
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+  const supabase = createClient();
 
-  const vendors = Array.from(new Set(initialPOs.map((p) => p.vendor).filter(Boolean))).sort() as string[];
-  const storeName = (id: string) => initialStores.find((s) => s.id === id)?.name || '—';
+  useEffect(() => {
+    fetchOrders();
+  }, [filter]);
 
-  const filtered = initialPOs.filter((po) => {
-    return (!statusFilter || po.status === statusFilter) &&
-      (!vendorFilter || po.vendor === vendorFilter) &&
-      (!storeFilter || po.destination_store_id === storeFilter);
-  });
+  async function fetchOrders() {
+    setLoading(true);
+    let query = supabase
+      .from('purchase_orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (filter !== 'all') {
+      query = query.eq('status', filter);
+    }
+
+    const { data, error } = await query;
+    if (!error && data) {
+      setOrders(data);
+    }
+    setLoading(false);
+  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Purchase Orders</h1>
-        <Link href="/dashboard/purchase-orders/new" className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+    <div className="ml-64 p-8">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">Purchase Orders</h1>
+          <p className="text-gray-500 text-sm mt-1">Manage vendor orders and track deliveries</p>
+        </div>
+        <Link
+          href="/dashboard/purchase-orders/create"
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+        >
           + New Purchase Order
         </Link>
       </div>
-      <div className="flex flex-wrap gap-3 mb-6">
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">All Status</option>
-          <option value="draft">Draft</option>
-          <option value="submitted">Submitted</option>
-          <option value="partially_received">Partially Received</option>
-          <option value="received">Received</option>
-          <option value="closed">Closed</option>
-        </select>
-        <select value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">All Designers</option>
-          {vendors.map((v) => (<option key={v} value={v}>{v}</option>))}
-        </select>
-        <select value={storeFilter} onChange={(e) => setStoreFilter(e.target.value)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">All Destinations</option>
-          {initialStores.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
-        </select>
-        <span className="self-center text-sm text-gray-500">{filtered.length} of {initialPOs.length} POs</span>
+
+      <div className="flex gap-2 mb-6">
+        {['all', 'draft', 'submitted', 'partial', 'received', 'cancelled'].map((s) => (
+          <button
+            key={s}
+            onClick={() => setFilter(s)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              filter === s
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
       </div>
-      <div className="bg-white rounded-lg shadow overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-200 bg-gray-50">
-              <th className="text-left px-4 py-3 font-semibold text-gray-600">PO #</th>
-              <th className="text-left px-4 py-3 font-semibold text-gray-600">Designer</th>
-              <th className="text-left px-4 py-3 font-semibold text-gray-600">Destination</th>
-              <th className="text-center px-4 py-3 font-semibold text-gray-600">Status</th>
-              <th className="text-center px-4 py-3 font-semibold text-gray-600">Items</th>
-              <th className="text-center px-4 py-3 font-semibold text-gray-600">Received</th>
-              <th className="text-right px-4 py-3 font-semibold text-gray-600">Total Cost</th>
-              <th className="text-left px-4 py-3 font-semibold text-gray-600">Order Date</th>
-              <th className="text-left px-4 py-3 font-semibold text-gray-600">Expected</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((po) => {
-              const totalQty = po.purchase_order_items?.reduce((s, i) => s + i.quantity_ordered, 0) || 0;
-              const totalReceived = po.purchase_order_items?.reduce((s, i) => s + i.quantity_received, 0) || 0;
-              const totalCost = po.purchase_order_items?.reduce((s, i) => s + (i.quantity_ordered * (i.cost_price || 0)), 0) || 0;
-              return (
-                <tr key={po.id} className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="px-4 py-3">
-                    <Link href={`/dashboard/purchase-orders/${po.id}`} className="text-blue-600 hover:underline font-medium">{po.po_number}</Link>
+
+      {loading ? (
+        <div className="text-center py-12 text-gray-400">Loading...</div>
+      ) : orders.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-xl border">
+          <p className="text-gray-400 text-lg">No purchase orders yet</p>
+          <p className="text-gray-400 text-sm mt-1">Create your first PO to get started</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">PO #</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Items</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Total</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Expected</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Created</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {orders.map((po) => (
+                <tr key={po.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => window.location.href = `/dashboard/purchase-orders/${po.id}`}>
+                  <td className="px-6 py-4 font-medium text-blue-600">{po.po_number}</td>
+                  <td className="px-6 py-4">{po.vendor}</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[po.status] || ''}`}>
+                      {po.status}
+                    </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{po.vendor}</td>
-                  <td className="px-4 py-3 text-gray-600">{storeName(po.destination_store_id)}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium capitalize ${statusBadge(po.status)}`}>{statusLabel(po.status)}</span>
-                  </td>
-                  <td className="px-4 py-3 text-center font-mono text-gray-700">{totalQty}</td>
-                  <td className="px-4 py-3 text-center font-mono text-gray-700">
-                    <span className={totalReceived >= totalQty && totalQty > 0 ? 'text-green-600 font-bold' : ''}>{totalReceived}/{totalQty}</span>
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-gray-900">${totalCost.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-gray-600">{po.order_date || '—'}</td>
-                  <td className="px-4 py-3 text-gray-600">{po.expected_date || '—'}</td>
+                  <td className="px-6 py-4">{po.total_items}</td>
+                  <td className="px-6 py-4">${Number(po.total_cost).toFixed(2)}</td>
+                  <td className="px-6 py-4 text-gray-500">{po.expected_date || '—'}</td>
+                  <td className="px-6 py-4 text-gray-500">{new Date(po.created_at).toLocaleDateString()}</td>
                 </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">No purchase orders found</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
