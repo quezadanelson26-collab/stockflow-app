@@ -68,6 +68,7 @@ export async function receiveItems(
   for (const item of items) {
     if (item.receiving_now <= 0) continue;
 
+    // Update PO item received qty
     const { data: poItem } = await supabase
       .from('purchase_order_items')
       .select('quantity_received')
@@ -80,6 +81,7 @@ export async function receiveItems(
       .update({ quantity_received: newReceived })
       .eq('id', item.id);
 
+    // Update inventory at destination store
     const { data: existing } = await supabase
       .from('inventory_levels')
       .select('id, quantity_on_hand')
@@ -102,6 +104,7 @@ export async function receiveItems(
     }
   }
 
+  // Auto-update PO status based on what's received
   const { data: allItems } = await supabase
     .from('purchase_order_items')
     .select('quantity_ordered, quantity_received')
