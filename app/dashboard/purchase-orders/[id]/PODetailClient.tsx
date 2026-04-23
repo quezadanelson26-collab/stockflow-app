@@ -215,7 +215,7 @@ export default function PODetailClient({ id }: { id: string }) {
             href="/dashboard/purchase-orders"
             className="text-blue-600 hover:underline mt-2 inline-block"
           >
-            ← Back to Purchase Orders
+            &larr; Back to Purchase Orders
           </Link>
         </div>
       </div>
@@ -233,7 +233,7 @@ export default function PODetailClient({ id }: { id: string }) {
           href="/dashboard/purchase-orders"
           className="text-gray-400 hover:text-gray-600 transition-colors"
         >
-          ← Back
+          &larr; Back
         </Link>
         <div className="flex-1">
           <h1 className="text-2xl font-bold">{po.po_number}</h1>
@@ -266,7 +266,7 @@ export default function PODetailClient({ id }: { id: string }) {
             <p className="text-lg font-semibold">
               {po.expected_date
                 ? new Date(po.expected_date).toLocaleDateString()
-                : '—'}
+                : '\u2014'}
             </p>
           </div>
           <div>
@@ -366,10 +366,10 @@ export default function PODetailClient({ id }: { id: string }) {
                     <div className="font-medium text-sm">{item.product_name}</div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">
-                    {item.variant_name || '—'}
+                    {item.variant_name || '\u2014'}
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-400">
-                    {item.sku || '—'}
+                    {item.sku || '\u2014'}
                   </td>
                   <td className="px-6 py-4 text-sm">{item.quantity}</td>
                   <td className="px-6 py-4 text-sm">
@@ -387,11 +387,63 @@ export default function PODetailClient({ id }: { id: string }) {
                       </span>
                       {item.received_at && (
                         <span className="text-xs text-gray-400">
-                          — {formatReceivedDate(item.received_at)}
+                          &mdash; {formatReceivedDate(item.received_at)}
                         </span>
                       )}
                     </div>
                     {hasHistory && (
                       <button
                         onClick={() => fetchReceivingHistory(item.id)}
-                        className="text-
+                        className="text-xs text-blue-500 hover:text-blue-700 mt-1"
+                      >
+                        {isExpanded ? 'Hide History' : 'View History'}
+                      </button>
+                    )}
+                    {isExpanded && receivingHistory[item.id] && (
+                      <div className="mt-2 space-y-1">
+                        {receivingHistory[item.id].map((entry, idx) => (
+                          <div
+                            key={idx}
+                            className="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1"
+                          >
+                            +{entry.quantity_received} &mdash;{' '}
+                            {formatReceivedDate(entry.received_at)} by{' '}
+                            {entry.received_by}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 text-sm">
+                    {item.quantity_backordered > 0 ? (
+                      <span className="text-orange-600 font-medium">
+                        {item.quantity_backordered}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">0</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                        status?.color || ''
+                      }`}
+                    >
+                      {status?.label || 'Not received'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm">
+                    ${Number(item.unit_cost).toFixed(2)}
+                  </td>
+                  <td className="px-6 py-4 text-sm font-medium">
+                    ${lineTotal.toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
