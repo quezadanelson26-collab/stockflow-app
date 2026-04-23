@@ -3,17 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
-
-type PurchaseOrder = {
-  id: string;
-  po_number: string;
-  vendor: string;
-  status: string;
-  total_cost: number;
-  total_items: number;
-  expected_date: string | null;
-  created_at: string;
-};
+import type { PurchaseOrder } from '@/lib/types/database';
 
 const statusColors: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-700',
@@ -23,100 +13,191 @@ const statusColors: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700',
 };
 
+const filterTabs = [
+  { key: 'open', label: 'Open POs', statuses: ['draft', 'submitted', 'partial'] },
+  { key: 'completed', label: 'Completed', statuses: ['received'] },
+  { key: 'cancelled', label: 'Cancelled', statuses: ['cancelled'] },
+  { key: 'all', label: 'All', statuses: [] },
+];
+
 export default function PurchaseOrdersClient() {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all');
+  const [activeTab, setActiveTab] = useState('open');
+  const [searchQuery, setSearchQuery] = useState('');
   const supabase = createClient();
 
   useEffect(() => {
     fetchOrders();
-  }, [filter]);
+  }, [activeTab]);
 
   async function fetchOrders() {
     setLoading(true);
+
+    const tab = filterTabs.find((t) => t.key === activeTab);
     let query = supabase
       .from('purchase_orders')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (filter !== 'all') {
-      query = query.eq('status', filter);
+    if (tab && tab.statuses.length > 0) {
+      query = query.in('status', tab.statuses);
     }
 
     const { data, error } = await query;
+
     if (!error && data) {
-      setOrders(data);
+      setOrders(data as PurchaseOrder[]);
     }
     setLoading(false);
   }
 
+  // Filter by vendor search
+  const filteredOrders = orders.filter((po) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      po.vendor.toLowerCase().includes(q) ||
+      po.po_number.toLowerCase().includes(q)
+    );
+  });
+
   return (
-    <div className="ml-64 p-8">
+    <div className="max-w-6xl">
+      {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-2xl font-bold">Purchase Orders</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage vendor orders and track deliveries</p>
+          <p className="text-gray-500 text-sm mt-1">
+            Manage vendor orders and track deliveries
+          </p>
         </div>
         <Link
           href="/dashboard/purchase-orders/create"
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm"
         >
           + New Purchase Order
         </Link>
       </div>
 
-      <div className="flex gap-2 mb-6">
-        {['all', 'draft', 'submitted', 'partial', 'received', 'cancelled'].map((s) => (
+      {/* Filter Tabs */}
+      <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
+        {filterTabs.map((tab) => (
           <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              filter === s
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === tab.key
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
+            {tab.label}
           </button>
         ))}
       </div>
 
+      {/* Search Bar */}
+      <div className="mb-4">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search by vendor name or PO number..."
+          className="w-full max-w-md border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      {/* Table */}
       {loading ? (
         <div className="text-center py-12 text-gray-400">Loading...</div>
-      ) : orders.length === 0 ? (
+      ) : filteredOrders.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-xl border">
-          <p className="text-gray-400 text-lg">No purchase orders yet</p>
-          <p className="text-gray-400 text-sm mt-1">Create your first PO to get started</p>
+          <p className="text-gray-400 text-lg">
+            {searchQuery ? 'No matching purchase orders' : 'No purchase orders yet'}
+          </p>
+          <p className="text-gray-400 text-sm mt-1">
+            {searchQuery
+              ? 'Try a different search term'
+              : 'Create your first PO to get started'}
+          </p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">PO #</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Items</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Total</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Expected</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Created</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  PO #
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Vendor
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Status
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Items
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Total
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Expected
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Paid
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">
+                  Created
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y">
-              {orders.map((po) => (
-                <tr key={po.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => window.location.href = `/dashboard/purchase-orders/${po.id}`}>
-                  <td className="px-6 py-4 font-medium text-blue-600">{po.po_number}</td>
-                  <td className="px-6 py-4">{po.vendor}</td>
+              {filteredOrders.map((po) => (
+                <tr
+                  key={po.id}
+                  className="hover:bg-gray-50 cursor-pointer transition-colors"
+                  onClick={() =>
+                    (window.location.href = `/dashboard/purchase-orders/${po.id}`)
+                  }
+                >
+                  <td className="px-6 py-4 font-medium text-blue-600">
+                    {po.po_number}
+                  </td>
+                  <td className="px-6 py-4 font-medium text-gray-900">
+                    {po.vendor}
+                  </td>
                   <td className="px-6 py-4">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[po.status] || ''}`}>
+                    <span
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize ${
+                        statusColors[po.status] || ''
+                      }`}
+                    >
                       {po.status}
                     </span>
                   </td>
-                  <td className="px-6 py-4">{po.total_items}</td>
-                  <td className="px-6 py-4">${Number(po.total_cost).toFixed(2)}</td>
-                  <td className="px-6 py-4 text-gray-500">{po.expected_date || '—'}</td>
-                  <td className="px-6 py-4 text-gray-500">{new Date(po.created_at).toLocaleDateString()}</td>
+                  <td className="px-6 py-4 text-gray-600">{po.total_items}</td>
+                  <td className="px-6 py-4 font-medium">
+                    ${Number(po.total_cost).toFixed(2)}
+                  </td>
+                  <td className="px-6 py-4 text-gray-500">
+                    {po.expected_date
+                      ? new Date(po.expected_date).toLocaleDateString()
+                      : '—'}
+                  </td>
+                  <td className="px-6 py-4">
+                    {po.paid ? (
+                      <span className="text-green-600 text-sm font-medium">
+                        ✓ Paid
+                      </span>
+                    ) : (
+                      <span className="text-gray-400 text-sm">—</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 text-gray-500">
+                    {new Date(po.created_at).toLocaleDateString()}
+                  </td>
                 </tr>
               ))}
             </tbody>
