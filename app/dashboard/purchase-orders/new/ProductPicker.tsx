@@ -20,7 +20,7 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
     const fetchProducts = async () => {
       setLoading(true);
 
-      const res = await fetch('/api/products'); // You will create this API route later
+      const res = await fetch('/api/products');
       const data = await res.json();
 
       setProducts(data);
@@ -35,9 +35,8 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
     const handleScan = (e: KeyboardEvent) => {
       if (!open) return;
 
-      // Barcode scanners send fast key events ending with Enter
       if (e.key === 'Enter' && search.length > 3) {
-        const match = products.flatMap(p => p.variants).find(v =>
+        const match = products.flatMap((p: any) => p.variants).find((v: any) =>
           v.barcode?.toLowerCase() === search.toLowerCase()
         );
 
@@ -60,9 +59,9 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
     return () => window.removeEventListener('keydown', handleScan);
   }, [search, products, open, onSelect, onClose]);
 
-  const filtered = products.filter(p =>
+  const filtered = products.filter((p: any) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
-        p.variants.some((v: any) =>
+    p.variants.some((v: any) =>
       v.sku?.toLowerCase().includes(search.toLowerCase()) ||
       v.barcode?.toLowerCase().includes(search.toLowerCase())
     )
@@ -76,7 +75,6 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
 
         <h2 className="text-xl font-semibold mb-4">Select Product</h2>
 
-        {/* Search */}
         <input
           type="text"
           placeholder="Search or scan barcode..."
@@ -91,13 +89,11 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
           <p className="text-gray-500">No products found.</p>
         )}
 
-        {/* Product List */}
         <div className="space-y-4">
-          {filtered.map((product) => (
+          {filtered.map((product: any) => (
             <div key={product.id} className="border rounded p-4">
               <p className="font-medium">{product.name}</p>
 
-              {/* Variants */}
               <div className="mt-2 space-y-2">
                 {product.variants.map((variant: any) => (
                   <button
@@ -127,7 +123,6 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
           ))}
         </div>
 
-        {/* Close */}
         <button
           type="button"
           onClick={onClose}
