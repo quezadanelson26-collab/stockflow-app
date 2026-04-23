@@ -62,7 +62,7 @@ export default function ProductPicker({ open, onClose, onSelect }: ProductPicker
 
   const filtered = products.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
-    p.variants.some(v =>
+        p.variants.some((v: any) =>
       v.sku?.toLowerCase().includes(search.toLowerCase()) ||
       v.barcode?.toLowerCase().includes(search.toLowerCase())
     )
