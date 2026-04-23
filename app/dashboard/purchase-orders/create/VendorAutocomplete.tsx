@@ -34,7 +34,7 @@ export default function VendorAutocomplete({
         .order('vendor', { ascending: true });
 
       if (!error && data) {
-        const unique = [...new Set(data.map((p) => p.vendor).filter(Boolean))] as string[];
+        const unique = Array.from(new Set(data.map((p: any) => p.vendor).filter(Boolean))) as string[];
         setVendors(unique);
       }
       setLoading(false);

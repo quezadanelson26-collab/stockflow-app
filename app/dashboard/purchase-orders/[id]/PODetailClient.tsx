@@ -415,9 +415,9 @@ export default function PODetailClient({ id }: { id: string }) {
                     )}
                   </td>
                   <td className="px-6 py-4 text-sm">
-                    {item.quantity_backordered > 0 ? (
+                    {item.backorder_qty > 0 ? (
                       <span className="text-orange-600 font-medium">
-                        {item.quantity_backordered}
+                        {item.backorder_qty}
                       </span>
                     ) : (
                       <span className="text-gray-400">0</span>
