@@ -235,8 +235,25 @@ export default function CreatePOClient() {
 
       {/* Duplicate PO Warning */}
       {duplicatePOWarning && (
-        <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg mb-6">
-          ⚠ {duplicatePOWarning}
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg mb-6 flex items-center justify-between">
+          <span>⚠ {duplicatePOWarning}</span>
+          <div className="flex gap-2 ml-4">
+            <button
+              onClick={() => {
+                setVendor('');
+                setDuplicatePOWarning('');
+              }}
+              className="px-3 py-1 text-sm font-medium text-yellow-700 bg-white border border-yellow-300 rounded-lg hover:bg-yellow-100 transition-colors"
+            >
+              No, Go Back
+            </button>
+            <button
+              onClick={() => setDuplicatePOWarning('')}
+              className="px-3 py-1 text-sm font-medium text-white bg-yellow-600 rounded-lg hover:bg-yellow-700 transition-colors"
+            >
+              Yes, Continue
+            </button>
+          </div>
         </div>
       )}
 
