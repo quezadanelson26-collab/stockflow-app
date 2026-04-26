@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import VendorAutocomplete from './VendorAutocomplete';
 import ProductPicker from './ProductPicker';
@@ -11,7 +11,12 @@ import type { POLineItemForm } from '@/lib/types/database';
 
 export default function CreatePOClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+
+  // ─── Edit-mode detection ──────────────────────────────────
+  const editId = searchParams.get('edit');
+  const isEditMode = Boolean(editId);
 
   // Form state
   const [vendor, setVendor] = useState('');
@@ -19,6 +24,7 @@ export default function CreatePOClient() {
   const [expectedDate, setExpectedDate] = useState('');
   const [vendorOrderNumber, setVendorOrderNumber] = useState('');
   const [items, setItems] = useState<POLineItemForm[]>([]);
+  const [editPONumber, setEditPONumber] = useState('');
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -26,6 +32,7 @@ export default function CreatePOClient() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [duplicatePOWarning, setDuplicatePOWarning] = useState('');
+  const [loadingEdit, setLoadingEdit] = useState(false);
 
   // Vendor is locked once items are added
   const vendorLocked = items.length > 0;
@@ -34,6 +41,73 @@ export default function CreatePOClient() {
   const totalUnits = items.reduce((sum, item) => sum + item.quantity, 0);
   const totalCost = items.reduce((sum, item) => sum + item.quantity * item.unit_cost, 0);
   const hasZeroCost = items.some((item) => item.unit_cost === 0);
+
+  // ─── Load existing PO when editing ────────────────────────
+  useEffect(() => {
+    if (!editId) return;
+
+    async function loadExistingPO() {
+      setLoadingEdit(true);
+
+      const { data: poData, error: poErr } = await supabase
+        .from('purchase_orders')
+        .select('*')
+        .eq('id', editId)
+        .single();
+
+      if (poErr || !poData) {
+        setError('Failed to load purchase order for editing');
+        setLoadingEdit(false);
+        return;
+      }
+
+      // Only allow editing draft POs
+      if (poData.status !== 'draft') {
+        setError(
+          `Cannot edit a ${poData.status} purchase order. Only drafts can be edited.`
+        );
+        setLoadingEdit(false);
+        return;
+      }
+
+      // Pre-fill form fields
+      setVendor(poData.vendor || '');
+      setNotes(poData.notes || '');
+      setExpectedDate(
+        poData.expected_date ? poData.expected_date.split('T')[0] : ''
+      );
+      setVendorOrderNumber(poData.vendor_order_number || '');
+      setEditPONumber(poData.po_number || '');
+
+      // Load line items
+      const { data: lineItems } = await supabase
+        .from('purchase_order_items')
+        .select('*')
+        .eq('po_id', editId)
+        .order('created_at', { ascending: true });
+
+      if (lineItems) {
+        const mapped: POLineItemForm[] = lineItems.map((li: any) => ({
+          product_id: li.product_id || '',
+          variant_id: li.variant_id || '',
+          product_name: li.product_name || '',
+          variant_name: li.variant_name || '',
+          sku: li.sku || '',
+          barcode: li.barcode || '',
+          quantity: li.quantity || 1,
+          unit_cost: li.unit_cost || 0,
+          shopify_cost: li.unit_cost || 0,
+          cost_modified: false,
+        }));
+        setItems(mapped);
+      }
+
+      setLoadingEdit(false);
+    }
+
+    loadExistingPO();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId]);
 
   // Check for duplicate open POs when vendor changes
   useEffect(() => {
@@ -44,20 +118,26 @@ export default function CreatePOClient() {
     async function checkDuplicatePO() {
       const { data } = await supabase
         .from('purchase_orders')
-        .select('po_number')
+        .select('id, po_number')
         .eq('vendor', vendor)
         .in('status', ['draft', 'submitted'])
-        .limit(1);
+        .limit(5);
 
-      if (data && data.length > 0) {
+      // In edit mode, filter out the current PO from duplicate check
+      const duplicates = isEditMode
+        ? data?.filter((d: any) => d.id !== editId)
+        : data;
+
+      if (duplicates && duplicates.length > 0) {
         setDuplicatePOWarning(
-          `You already have ${data[0].po_number} open for ${vendor}. Continue anyway?`
+          `You already have ${duplicates[0].po_number} open for ${vendor}. Continue anyway?`
         );
       } else {
         setDuplicatePOWarning('');
       }
     }
     checkDuplicatePO();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendor]);
 
   // Handle product selection from picker
@@ -123,7 +203,7 @@ export default function CreatePOClient() {
     }
   }
 
-  // Submit PO
+  // ─── Submit: Create or Update ─────────────────────────────
   async function handleSubmit(status: 'draft' | 'submitted') {
     if (!vendor.trim()) {
       setError('Please select a vendor first');
@@ -147,63 +227,140 @@ export default function CreatePOClient() {
     setConfirmOpen(false);
 
     try {
-      // Generate PO number via database function
-      const { data: poNumData, error: poNumError } = await supabase.rpc(
-        'generate_po_number'
-      );
+      if (isEditMode && editId) {
+        // ══════════════════════════════════════════════════
+        // UPDATE existing PO
+        // ══════════════════════════════════════════════════
+        const { error: poError } = await supabase
+          .from('purchase_orders')
+          .update({
+            vendor: vendor.trim(),
+            status,
+            notes: notes.trim() || null,
+            expected_date: expectedDate || null,
+            vendor_order_number: vendorOrderNumber.trim() || null,
+            total_cost: totalCost,
+            total_items: totalUnits,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editId);
 
-      const poNumber = poNumError ? `PO-${Date.now().toString(36).toUpperCase()}` : poNumData;
+        if (poError) {
+          setError(poError.message || 'Failed to update purchase order');
+          setSaving(false);
+          return;
+        }
 
-      // Insert PO
-      const { data: po, error: poError } = await supabase
-        .from('purchase_orders')
-        .insert({
-          po_number: poNumber,
-          vendor: vendor.trim(),
-          status,
-          notes: notes.trim() || null,
-          expected_date: expectedDate || null,
-          vendor_order_number: vendorOrderNumber.trim() || null,
-          total_cost: totalCost,
-          total_items: totalUnits,
-        })
-        .select()
-        .single();
+        // Delete old line items and re-insert fresh
+        const { error: delErr } = await supabase
+          .from('purchase_order_items')
+          .delete()
+          .eq('po_id', editId);
 
-      if (poError || !po) {
-        setError(poError?.message || 'Failed to create purchase order');
-        setSaving(false);
-        return;
+        if (delErr) {
+          setError('Failed to update line items: ' + delErr.message);
+          setSaving(false);
+          return;
+        }
+
+        const lineItems = items.map((item) => ({
+          po_id: editId,
+          product_id: item.product_id || null,
+          variant_id: item.variant_id || null,
+          product_name: item.product_name.trim(),
+          variant_name: item.variant_name || null,
+          sku: item.sku || null,
+          barcode: item.barcode || null,
+          quantity: item.quantity,
+          unit_cost: item.unit_cost,
+        }));
+
+        const { error: itemsError } = await supabase
+          .from('purchase_order_items')
+          .insert(lineItems);
+
+        if (itemsError) {
+          setError(itemsError.message);
+          setSaving(false);
+          return;
+        }
+
+        // Go back to PO detail page
+        router.push(`/dashboard/purchase-orders/${editId}`);
+      } else {
+        // ══════════════════════════════════════════════════
+        // CREATE new PO
+        // ══════════════════════════════════════════════════
+
+        // Generate PO number via database function
+        const { data: poNumData, error: poNumError } = await supabase.rpc(
+          'generate_po_number'
+        );
+
+        const poNumber = poNumError
+          ? `PO-${Date.now().toString(36).toUpperCase()}`
+          : poNumData;
+
+        // Insert PO
+        const { data: po, error: poError } = await supabase
+          .from('purchase_orders')
+          .insert({
+            po_number: poNumber,
+            vendor: vendor.trim(),
+            status,
+            notes: notes.trim() || null,
+            expected_date: expectedDate || null,
+            vendor_order_number: vendorOrderNumber.trim() || null,
+            total_cost: totalCost,
+            total_items: totalUnits,
+          })
+          .select()
+          .single();
+
+        if (poError || !po) {
+          setError(poError?.message || 'Failed to create purchase order');
+          setSaving(false);
+          return;
+        }
+
+        // Insert line items
+        const lineItems = items.map((item) => ({
+          po_id: po.id,
+          product_id: item.product_id || null,
+          variant_id: item.variant_id || null,
+          product_name: item.product_name.trim(),
+          variant_name: item.variant_name || null,
+          sku: item.sku || null,
+          barcode: item.barcode || null,
+          quantity: item.quantity,
+          unit_cost: item.unit_cost,
+        }));
+
+        const { error: itemsError } = await supabase
+          .from('purchase_order_items')
+          .insert(lineItems);
+
+        if (itemsError) {
+          setError(itemsError.message);
+          setSaving(false);
+          return;
+        }
+
+        router.push('/dashboard/purchase-orders');
       }
-
-      // Insert line items
-      const lineItems = items.map((item) => ({
-        po_id: po.id,
-        product_id: item.product_id || null,
-        variant_id: item.variant_id || null,
-        product_name: item.product_name.trim(),
-        variant_name: item.variant_name || null,
-        sku: item.sku || null,
-        barcode: item.barcode || null,
-        quantity: item.quantity,
-        unit_cost: item.unit_cost,
-      }));
-
-      const { error: itemsError } = await supabase
-        .from('purchase_order_items')
-        .insert(lineItems);
-
-      if (itemsError) {
-        setError(itemsError.message);
-        setSaving(false);
-        return;
-      }
-
-      router.push('/dashboard/purchase-orders');
     } catch (err) {
       setError('An unexpected error occurred');
       setSaving(false);
     }
+  }
+
+  // ─── Loading state for edit mode ──────────────────────────
+  if (loadingEdit) {
+    return (
+      <div className="p-8 text-center text-gray-500">
+        Loading purchase order...
+      </div>
+    );
   }
 
   return (
@@ -211,12 +368,20 @@ export default function CreatePOClient() {
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
         <Link
-          href="/dashboard/purchase-orders"
+          href={
+            isEditMode
+              ? `/dashboard/purchase-orders/${editId}`
+              : '/dashboard/purchase-orders'
+          }
           className="text-gray-400 hover:text-gray-600 transition-colors"
         >
           ← Back
         </Link>
-        <h1 className="text-2xl font-bold">New Purchase Order</h1>
+        <h1 className="text-2xl font-bold">
+          {isEditMode
+            ? `Edit Purchase Order — ${editPONumber}`
+            : 'New Purchase Order'}
+        </h1>
       </div>
 
       {/* Error Banner */}
@@ -479,14 +644,18 @@ export default function CreatePOClient() {
               disabled={saving || items.length === 0}
               className="px-4 py-2 border rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              Save as Draft
+              {isEditMode ? 'Save Draft' : 'Save as Draft'}
             </button>
             <button
               onClick={() => handleSubmit('submitted')}
               disabled={saving || items.length === 0}
               className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {saving ? 'Creating...' : 'Submit PO'}
+              {saving
+                ? isEditMode
+                  ? 'Saving...'
+                  : 'Creating...'
+                : 'Submit PO'}
             </button>
           </div>
         </div>
