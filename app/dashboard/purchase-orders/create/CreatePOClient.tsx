@@ -9,6 +9,11 @@ import ProductPicker from './ProductPicker';
 import SubmitConfirmModal from './SubmitConfirmModal';
 import type { POLineItemForm } from '@/lib/types/database';
 
+interface LocationOption {
+  id: string;
+  name: string;
+}
+
 export default function CreatePOClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -23,8 +28,13 @@ export default function CreatePOClient() {
   const [notes, setNotes] = useState('');
   const [expectedDate, setExpectedDate] = useState('');
   const [vendorOrderNumber, setVendorOrderNumber] = useState('');
+  const [location, setLocation] = useState('');
+  const [cancelDate, setCancelDate] = useState('');
   const [items, setItems] = useState<POLineItemForm[]>([]);
   const [editPONumber, setEditPONumber] = useState('');
+
+  // Locations dropdown options
+  const [locations, setLocations] = useState<LocationOption[]>([]);
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -39,8 +49,25 @@ export default function CreatePOClient() {
 
   // Totals
   const totalUnits = items.reduce((sum, item) => sum + item.quantity, 0);
-  const totalCost = items.reduce((sum, item) => sum + item.quantity * item.unit_cost, 0);
+  const totalCost = items.reduce(
+    (sum, item) => sum + item.quantity * item.unit_cost,
+    0
+  );
   const hasZeroCost = items.some((item) => item.unit_cost === 0);
+
+  // ─── Fetch locations for dropdown ─────────────────────────
+  useEffect(() => {
+    async function fetchLocations() {
+      const { data } = await supabase
+        .from('locations')
+        .select('id, name')
+        .eq('is_active', true)
+        .order('name');
+      if (data) setLocations(data);
+    }
+    fetchLocations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Load existing PO when editing ────────────────────────
   useEffect(() => {
@@ -77,6 +104,10 @@ export default function CreatePOClient() {
         poData.expected_date ? poData.expected_date.split('T')[0] : ''
       );
       setVendorOrderNumber(poData.vendor_order_number || '');
+      setLocation(poData.location || '');
+      setCancelDate(
+        poData.cancel_date ? poData.cancel_date.split('T')[0] : ''
+      );
       setEditPONumber(poData.po_number || '');
 
       // Load line items
@@ -239,6 +270,8 @@ export default function CreatePOClient() {
             notes: notes.trim() || null,
             expected_date: expectedDate || null,
             vendor_order_number: vendorOrderNumber.trim() || null,
+            location: location || null,
+            cancel_date: cancelDate || null,
             total_cost: totalCost,
             total_items: totalUnits,
             updated_at: new Date().toISOString(),
@@ -311,6 +344,8 @@ export default function CreatePOClient() {
             notes: notes.trim() || null,
             expected_date: expectedDate || null,
             vendor_order_number: vendorOrderNumber.trim() || null,
+            location: location || null,
+            cancel_date: cancelDate || null,
             total_cost: totalCost,
             total_items: totalUnits,
           })
@@ -424,7 +459,7 @@ export default function CreatePOClient() {
 
       {/* Form Card */}
       <div className="bg-white rounded-xl border p-6 space-y-6">
-        {/* Vendor + Expected Date + Vendor Order # */}
+        {/* Row 1: Vendor + Expected Date + Vendor Order # */}
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -464,6 +499,47 @@ export default function CreatePOClient() {
               className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+        </div>
+
+        {/* Row 2: Location + Cancel Date */}
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Receiving Location
+            </label>
+            <select
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            >
+              <option value="">Select location...</option>
+              {locations.map((loc) => (
+                <option key={loc.id} value={loc.name}>
+                  {loc.name}
+                </option>
+              ))}
+            </select>
+            {locations.length === 0 && (
+              <p className="text-xs text-gray-400 mt-1">
+                Add locations in Settings first
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Cancel Date
+            </label>
+            <input
+              type="date"
+              value={cancelDate}
+              onChange={(e) => setCancelDate(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Reject shipment if not received by this date
+            </p>
+          </div>
+          <div />
         </div>
 
         {/* Notes */}

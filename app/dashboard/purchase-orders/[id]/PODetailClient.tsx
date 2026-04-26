@@ -14,7 +14,12 @@ interface PurchaseOrder {
   total_items: number;
   total_cost: number;
   expected_date: string | null;
+  cancel_date: string | null;
+  location: string | null;
   notes: string | null;
+  close_notes: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +74,12 @@ export default function PODetailClient({ id }: { id: string }) {
   );
   const [receivingLoading, setReceivingLoading] = useState(false);
   const scanRef = useRef<HTMLInputElement>(null);
+
+  // Close PO state
+  const [isClosing, setIsClosing] = useState(false);
+  const [closeNote, setCloseNote] = useState('');
+  const [closingLoading, setClosingLoading] = useState(false);
+  const [droppedItems, setDroppedItems] = useState<Set<string>>(new Set());
 
   // History state
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -149,6 +160,7 @@ export default function PODetailClient({ id }: { id: string }) {
   const getComputedStatus = (): string => {
     if (!po) return 'draft';
     if (po.status === 'cancelled') return 'cancelled';
+    if (po.status === 'closed') return 'closed';
     if (po.status === 'draft') return 'draft';
 
     const totalOrdered = lineItems.reduce((s, i) => s + i.quantity, 0);
@@ -165,6 +177,7 @@ export default function PODetailClient({ id }: { id: string }) {
 
   const getLineStatus = (item: POLineItem): string => {
     const r = item.quantity_received || 0;
+    if (item.line_status === 'dropped') return 'dropped';
     if (r === 0) return 'not_received';
     if (r >= item.quantity) return 'received';
     return 'partial';
@@ -179,6 +192,7 @@ export default function PODetailClient({ id }: { id: string }) {
     submitted: { label: 'Submitted', cls: 'bg-blue-100 text-blue-700' },
     partial: { label: 'Partial', cls: 'bg-yellow-100 text-yellow-700' },
     received: { label: 'Received', cls: 'bg-green-100 text-green-700' },
+    closed: { label: 'Closed', cls: 'bg-purple-100 text-purple-700' },
     cancelled: { label: 'Cancelled', cls: 'bg-red-100 text-red-700' },
   };
 
@@ -187,6 +201,7 @@ export default function PODetailClient({ id }: { id: string }) {
     partial: { label: 'Partial', cls: 'bg-yellow-100 text-yellow-700' },
     received: { label: 'Received', cls: 'bg-green-100 text-green-700' },
     backorder: { label: 'Backorder', cls: 'bg-orange-100 text-orange-700' },
+    dropped: { label: 'Dropped', cls: 'bg-red-100 text-red-600' },
   };
 
   // ─── PO Actions ───────────────────────────────────────────
@@ -235,7 +250,8 @@ export default function PODetailClient({ id }: { id: string }) {
     const initial: Record<string, number> = {};
     lineItems.forEach((item) => {
       const remaining = item.quantity - (item.quantity_received || 0);
-      if (remaining > 0) initial[item.id] = 0;
+      if (remaining > 0 && item.line_status !== 'dropped')
+        initial[item.id] = 0;
     });
     setReceivingQtys(initial);
     setIsReceiving(true);
@@ -282,7 +298,8 @@ export default function PODetailClient({ id }: { id: string }) {
     const all: Record<string, number> = {};
     lineItems.forEach((item) => {
       const remaining = item.quantity - (item.quantity_received || 0);
-      if (remaining > 0) all[item.id] = remaining;
+      if (remaining > 0 && item.line_status !== 'dropped')
+        all[item.id] = remaining;
     });
     setReceivingQtys(all);
     setReceivingMode('receive_all');
@@ -380,9 +397,7 @@ export default function PODetailClient({ id }: { id: string }) {
           `Failed to update line item ${lineItemId}:`,
           updateErr
         );
-        updateErrors.push(
-          `${item.product_name}: ${updateErr.message}`
-        );
+        updateErrors.push(`${item.product_name}: ${updateErr.message}`);
       }
     }
 
@@ -398,29 +413,28 @@ export default function PODetailClient({ id }: { id: string }) {
     // 4 — Recompute & sync PO status
     const { data: updatedItems } = await supabase
       .from('purchase_order_items')
-      .select('quantity, quantity_received')
+      .select('quantity, quantity_received, line_status')
       .eq('po_id', id);
 
     if (updatedItems) {
-      const totOrd = updatedItems.reduce(
+      const activItems = updatedItems.filter(
+        (i: any) => i.line_status !== 'dropped'
+      );
+      const totOrd = activItems.reduce(
         (s: number, i: any) => s + i.quantity,
         0
       );
-      const totRec = updatedItems.reduce(
+      const totRec = activItems.reduce(
         (s: number, i: any) => s + (i.quantity_received || 0),
         0
       );
       const newStatus =
         totRec >= totOrd ? 'received' : totRec > 0 ? 'partial' : 'submitted';
 
-      const { error: statusErr } = await supabase
+      await supabase
         .from('purchase_orders')
         .update({ status: newStatus, updated_at: now })
         .eq('id', id);
-
-      if (statusErr) {
-        console.error('Failed to update PO status:', statusErr);
-      }
     }
 
     const totalQty = entries.reduce((s, [, q]) => s + q, 0);
@@ -430,6 +444,91 @@ export default function PODetailClient({ id }: { id: string }) {
       message: `Received ${totalQty} item${totalQty > 1 ? 's' : ''} successfully`,
       type: 'success',
     });
+    fetchPO();
+  };
+
+  // ─── Close PO Logic ───────────────────────────────────────
+
+  const handleOpenClose = () => {
+    // Pre-select all backorder items
+    const backorderIds = new Set<string>();
+    lineItems.forEach((item) => {
+      const remaining = item.quantity - (item.quantity_received || 0);
+      if (remaining > 0 && item.line_status !== 'dropped') {
+        backorderIds.add(item.id);
+      }
+    });
+    setDroppedItems(backorderIds);
+    setCloseNote('');
+    setIsClosing(true);
+  };
+
+  const toggleDroppedItem = (itemId: string) => {
+    const next = new Set(droppedItems);
+    if (next.has(itemId)) {
+      next.delete(itemId);
+    } else {
+      next.add(itemId);
+    }
+    setDroppedItems(next);
+  };
+
+  const handleConfirmClose = async () => {
+    if (!closeNote.trim()) {
+      setToast({
+        message: 'Please add a note explaining why the PO is being closed',
+        type: 'error',
+      });
+      return;
+    }
+
+    setClosingLoading(true);
+    const now = new Date().toISOString();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const closedBy = user?.email || 'Unknown';
+
+    // Mark dropped items
+    for (const itemId of droppedItems) {
+      const { error } = await supabase
+        .from('purchase_order_items')
+        .update({
+          line_status: 'dropped',
+          backorder_qty: 0,
+        })
+        .eq('id', itemId);
+
+      if (error) {
+        console.error(`Failed to drop item ${itemId}:`, error);
+      }
+    }
+
+    // Update PO status to closed
+    const { error: closeErr } = await supabase
+      .from('purchase_orders')
+      .update({
+        status: 'closed',
+        close_notes: closeNote.trim(),
+        closed_at: now,
+        closed_by: closedBy,
+        updated_at: now,
+      })
+      .eq('id', id);
+
+    if (closeErr) {
+      setToast({
+        message: `Failed to close PO: ${closeErr.message}`,
+        type: 'error',
+      });
+      setClosingLoading(false);
+      return;
+    }
+
+    setIsClosing(false);
+    setClosingLoading(false);
+    setToast({ message: 'Purchase order closed', type: 'success' });
     fetchPO();
   };
 
@@ -466,6 +565,40 @@ export default function PODetailClient({ id }: { id: string }) {
   );
   const sBadge = statusStyles[computedStatus] || statusStyles.draft;
 
+  // Build summary cards dynamically
+  const summaryCards: { label: string; value: string | number }[] = [
+    { label: 'Total Items', value: totalOrdered },
+    { label: 'Total Cost', value: `$${po.total_cost?.toFixed(2)}` },
+    {
+      label: 'Expected Date',
+      value: po.expected_date
+        ? new Date(po.expected_date).toLocaleDateString()
+        : '—',
+    },
+    { label: 'Received', value: `${totalReceived} / ${totalOrdered}` },
+    {
+      label: 'Created',
+      value: new Date(po.created_at).toLocaleDateString(),
+    },
+  ];
+
+  // Add Location card if set
+  if (po.location) {
+    summaryCards.push({ label: 'Location', value: po.location });
+  }
+
+  // Add Cancel Date card if set
+  if (po.cancel_date) {
+    const cancelDateObj = new Date(po.cancel_date);
+    const isPastCancel = cancelDateObj < new Date();
+    summaryCards.push({
+      label: 'Cancel Date',
+      value: isPastCancel
+        ? `⚠ ${cancelDateObj.toLocaleDateString()}`
+        : cancelDateObj.toLocaleDateString(),
+    });
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       {/* Toast */}
@@ -498,23 +631,30 @@ export default function PODetailClient({ id }: { id: string }) {
         </span>
       </div>
 
+      {/* Cancel Date Warning */}
+      {po.cancel_date && new Date(po.cancel_date) < new Date() && computedStatus !== 'received' && computedStatus !== 'closed' && computedStatus !== 'cancelled' && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
+          ⚠ <strong>Past cancel date</strong> — This PO was due by{' '}
+          {new Date(po.cancel_date).toLocaleDateString()}. You may reject the shipment if it arrives now.
+        </div>
+      )}
+
+      {/* Closed PO Info */}
+      {computedStatus === 'closed' && po.close_notes && (
+        <div className="bg-purple-50 border border-purple-200 text-purple-700 px-4 py-3 rounded-lg mb-6">
+          <strong>PO Closed</strong>
+          {po.closed_at && (
+            <span className="text-sm ml-2">
+              on {new Date(po.closed_at).toLocaleDateString()} by {po.closed_by}
+            </span>
+          )}
+          <p className="mt-1 text-sm">{po.close_notes}</p>
+        </div>
+      )}
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        {[
-          { label: 'Total Items', value: totalOrdered },
-          { label: 'Total Cost', value: `$${po.total_cost?.toFixed(2)}` },
-          {
-            label: 'Expected Date',
-            value: po.expected_date
-              ? new Date(po.expected_date).toLocaleDateString()
-              : '—',
-          },
-          { label: 'Received', value: `${totalReceived} / ${totalOrdered}` },
-          {
-            label: 'Created',
-            value: new Date(po.created_at).toLocaleDateString(),
-          },
-        ].map((c) => (
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
+        {summaryCards.map((c) => (
           <div key={c.label} className="bg-white rounded-lg border p-4">
             <p className="text-sm text-gray-500">{c.label}</p>
             <p className="text-xl font-semibold">{c.value}</p>
@@ -554,6 +694,14 @@ export default function PODetailClient({ id }: { id: string }) {
             >
               Receive Items
             </button>
+            {computedStatus === 'partial' && (
+              <button
+                onClick={handleOpenClose}
+                className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200"
+              >
+                Close PO
+              </button>
+            )}
             {computedStatus === 'submitted' && (
               <button
                 onClick={handleCancelPO}
@@ -567,6 +715,11 @@ export default function PODetailClient({ id }: { id: string }) {
         {computedStatus === 'received' && (
           <span className="px-4 py-2 bg-green-100 text-green-700 rounded-lg font-medium">
             ✓ Fully Received
+          </span>
+        )}
+        {computedStatus === 'closed' && (
+          <span className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg font-medium">
+            Closed
           </span>
         )}
       </div>
@@ -648,92 +801,94 @@ export default function PODetailClient({ id }: { id: string }) {
                 </tr>
               </thead>
               <tbody>
-                {lineItems.map((item) => {
-                  const recv = item.quantity_received || 0;
-                  const rem = item.quantity - recv;
-                  const done = rem <= 0;
-                  return (
-                    <tr
-                      key={item.id}
-                      className={`border-b ${done ? 'opacity-50' : ''}`}
-                    >
-                      <td className="py-3 pr-4">
-                        <div className="font-medium">
-                          {item.product_name}
-                        </div>
-                        <div className="text-gray-500 text-xs">
-                          {item.variant_name}
-                        </div>
-                      </td>
-                      <td className="py-3 pr-4 text-gray-600">
-                        {item.sku}
-                      </td>
-                      <td className="py-3 text-center">{item.quantity}</td>
-                      <td className="py-3 text-center">{recv}</td>
-                      <td className="py-3 text-center">
-                        {Math.max(0, rem)}
-                      </td>
-                      <td className="py-3 text-center">
-                        {done ? (
-                          <span className="text-green-600 text-xs font-medium">
-                            Done
-                          </span>
-                        ) : (
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() =>
-                                setReceivingQtys((prev) => ({
-                                  ...prev,
-                                  [item.id]: Math.max(
-                                    0,
-                                    (prev[item.id] || 0) - 1
-                                  ),
-                                }))
-                              }
-                              className="w-7 h-7 rounded bg-gray-200 hover:bg-gray-300 text-lg leading-none"
-                            >
-                              -
-                            </button>
-                            <input
-                              type="number"
-                              min="0"
-                              max={rem}
-                              value={receivingQtys[item.id] || 0}
-                              onChange={(e) => {
-                                const val = Math.min(
-                                  Math.max(
-                                    0,
-                                    parseInt(e.target.value) || 0
-                                  ),
-                                  rem
-                                );
-                                setReceivingQtys((prev) => ({
-                                  ...prev,
-                                  [item.id]: val,
-                                }));
-                              }}
-                              className="w-14 text-center border rounded py-1"
-                            />
-                            <button
-                              onClick={() =>
-                                setReceivingQtys((prev) => ({
-                                  ...prev,
-                                  [item.id]: Math.min(
-                                    rem,
-                                    (prev[item.id] || 0) + 1
-                                  ),
-                                }))
-                              }
-                              className="w-7 h-7 rounded bg-gray-200 hover:bg-gray-300 text-lg leading-none"
-                            >
-                              +
-                            </button>
+                {lineItems
+                  .filter((item) => item.line_status !== 'dropped')
+                  .map((item) => {
+                    const recv = item.quantity_received || 0;
+                    const rem = item.quantity - recv;
+                    const done = rem <= 0;
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`border-b ${done ? 'opacity-50' : ''}`}
+                      >
+                        <td className="py-3 pr-4">
+                          <div className="font-medium">
+                            {item.product_name}
                           </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                          <div className="text-gray-500 text-xs">
+                            {item.variant_name}
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4 text-gray-600">
+                          {item.sku}
+                        </td>
+                        <td className="py-3 text-center">{item.quantity}</td>
+                        <td className="py-3 text-center">{recv}</td>
+                        <td className="py-3 text-center">
+                          {Math.max(0, rem)}
+                        </td>
+                        <td className="py-3 text-center">
+                          {done ? (
+                            <span className="text-green-600 text-xs font-medium">
+                              Done
+                            </span>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() =>
+                                  setReceivingQtys((prev) => ({
+                                    ...prev,
+                                    [item.id]: Math.max(
+                                      0,
+                                      (prev[item.id] || 0) - 1
+                                    ),
+                                  }))
+                                }
+                                className="w-7 h-7 rounded bg-gray-200 hover:bg-gray-300 text-lg leading-none"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min="0"
+                                max={rem}
+                                value={receivingQtys[item.id] || 0}
+                                onChange={(e) => {
+                                  const val = Math.min(
+                                    Math.max(
+                                      0,
+                                      parseInt(e.target.value) || 0
+                                    ),
+                                    rem
+                                  );
+                                  setReceivingQtys((prev) => ({
+                                    ...prev,
+                                    [item.id]: val,
+                                  }));
+                                }}
+                                className="w-14 text-center border rounded py-1"
+                              />
+                              <button
+                                onClick={() =>
+                                  setReceivingQtys((prev) => ({
+                                    ...prev,
+                                    [item.id]: Math.min(
+                                      rem,
+                                      (prev[item.id] || 0) + 1
+                                    ),
+                                  }))
+                                }
+                                className="w-7 h-7 rounded bg-gray-200 hover:bg-gray-300 text-lg leading-none"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -761,11 +916,97 @@ export default function PODetailClient({ id }: { id: string }) {
       )}
 
       {/* ══════════════════════════════════════════════════ */}
+      {/* CLOSE PO MODAL                                    */}
+      {/* ══════════════════════════════════════════════════ */}
+      {isClosing && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <h2 className="text-lg font-semibold mb-1">Close Purchase Order</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Select which backorder items to drop and add a note explaining why.
+            </p>
+
+            {/* Backorder items list */}
+            <div className="border rounded-lg divide-y mb-4 max-h-60 overflow-y-auto">
+              {lineItems
+                .filter((item) => {
+                  const remaining =
+                    item.quantity - (item.quantity_received || 0);
+                  return remaining > 0 && item.line_status !== 'dropped';
+                })
+                .map((item) => {
+                  const remaining =
+                    item.quantity - (item.quantity_received || 0);
+                  return (
+                    <label
+                      key={item.id}
+                      className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={droppedItems.has(item.id)}
+                        onChange={() => toggleDroppedItem(item.id)}
+                        className="rounded"
+                      />
+                      <div className="flex-1">
+                        <span className="font-medium text-sm">
+                          {item.product_name}
+                        </span>
+                        <span className="text-gray-500 text-sm ml-1">
+                          — {item.variant_name}
+                        </span>
+                      </div>
+                      <span className="text-orange-600 text-sm font-medium">
+                        {remaining} remaining
+                      </span>
+                    </label>
+                  );
+                })}
+            </div>
+
+            {/* Close note */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Reason for closing *
+              </label>
+              <textarea
+                value={closeNote}
+                onChange={(e) => setCloseNote(e.target.value)}
+                rows={3}
+                placeholder="e.g., Supplier notified they cannot fulfill remaining items..."
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setIsClosing(false)}
+                className="px-4 py-2 border rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmClose}
+                disabled={closingLoading || !closeNote.trim()}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {closingLoading ? 'Closing...' : 'Confirm Close PO'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════ */}
       {/* LINE ITEMS TABLE                                  */}
       {/* ══════════════════════════════════════════════════ */}
       <div className="bg-white rounded-lg border">
         <div className="p-4 border-b">
           <h2 className="text-lg font-semibold">Line Items</h2>
+          <p className="text-xs text-gray-400 mt-1">
+            Click a row to see receiving history
+          </p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -778,7 +1019,6 @@ export default function PODetailClient({ id }: { id: string }) {
                 <th className="px-4 py-3 text-center">Received</th>
                 <th className="px-4 py-3 text-center">Backorder</th>
                 <th className="px-4 py-3 text-center">Status</th>
-                <th className="px-4 py-3 text-center">Received At</th>
                 <th className="px-4 py-3 text-right">Cost</th>
                 <th className="px-4 py-3 text-right">Total</th>
               </tr>
@@ -798,14 +1038,15 @@ export default function PODetailClient({ id }: { id: string }) {
                     ? 'backorder'
                     : actualStatus;
                 const lineStyle =
-                  lineStyleMap[displayStatus] ||
-                  lineStyleMap.not_received;
+                  lineStyleMap[displayStatus] || lineStyleMap.not_received;
                 const isExpanded = expandedRows.has(item.id);
 
                 return (
                   <Fragment key={item.id}>
                     <tr
-                      className="border-b hover:bg-gray-50 cursor-pointer"
+                      className={`border-b hover:bg-gray-50 cursor-pointer ${
+                        actualStatus === 'dropped' ? 'opacity-50' : ''
+                      }`}
                       onClick={() => toggleHistory(item.id)}
                     >
                       <td className="px-4 py-3 font-medium">
@@ -814,17 +1055,15 @@ export default function PODetailClient({ id }: { id: string }) {
                       <td className="px-4 py-3 text-gray-600">
                         {item.variant_name}
                       </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {item.sku}
-                      </td>
+                      <td className="px-4 py-3 text-gray-600">{item.sku}</td>
                       <td className="px-4 py-3 text-center">
                         {item.quantity}
                       </td>
+                      <td className="px-4 py-3 text-center">{received}</td>
                       <td className="px-4 py-3 text-center">
-                        {received}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {backorder > 0 ? (
+                        {actualStatus === 'dropped' ? (
+                          <span className="text-red-500 text-xs">Dropped</span>
+                        ) : backorder > 0 ? (
                           <span className="text-orange-600 font-medium">
                             {backorder}
                           </span>
@@ -843,11 +1082,6 @@ export default function PODetailClient({ id }: { id: string }) {
                               : lineStyle.label}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-center text-xs text-gray-500">
-                        {item.received_at
-                          ? new Date(item.received_at).toLocaleString()
-                          : '—'}
-                      </td>
                       <td className="px-4 py-3 text-right">
                         ${item.unit_cost?.toFixed(2)}
                       </td>
@@ -859,7 +1093,7 @@ export default function PODetailClient({ id }: { id: string }) {
                     {/* Expanded Receiving History */}
                     {isExpanded && (
                       <tr>
-                        <td colSpan={10} className="px-8 py-3 bg-gray-50">
+                        <td colSpan={9} className="px-8 py-3 bg-gray-50">
                           <div className="text-xs font-medium text-gray-500 mb-2">
                             Receiving History
                           </div>
@@ -870,9 +1104,7 @@ export default function PODetailClient({ id }: { id: string }) {
                                   <th className="text-left pb-1">
                                     Date &amp; Time
                                   </th>
-                                  <th className="text-center pb-1">
-                                    Qty
-                                  </th>
+                                  <th className="text-center pb-1">Qty</th>
                                   <th className="text-left pb-1">
                                     Received By
                                   </th>
@@ -889,9 +1121,7 @@ export default function PODetailClient({ id }: { id: string }) {
                                     <td className="py-1 text-center">
                                       {h.quantity_received}
                                     </td>
-                                    <td className="py-1">
-                                      {h.received_by}
-                                    </td>
+                                    <td className="py-1">{h.received_by}</td>
                                   </tr>
                                 ))}
                               </tbody>
