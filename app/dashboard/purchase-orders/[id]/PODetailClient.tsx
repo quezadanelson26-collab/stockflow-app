@@ -56,23 +56,30 @@ export default function PODetailClient({ id }: { id: string }) {
   const [po, setPO] = useState<PurchaseOrder | null>(null);
   const [lineItems, setLineItems] = useState<POLineItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: 'success' | 'error';
+  } | null>(null);
 
   // Receiving state
   const [isReceiving, setIsReceiving] = useState(false);
   const [receivingMode, setReceivingMode] = useState<ReceivingMode>('manual');
-  const [receivingQtys, setReceivingQtys] = useState<Record<string, number>>({});
+  const [receivingQtys, setReceivingQtys] = useState<Record<string, number>>(
+    {}
+  );
   const [receivingLoading, setReceivingLoading] = useState(false);
   const scanRef = useRef<HTMLInputElement>(null);
 
   // History state
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [historyData, setHistoryData] = useState<Record<string, ReceivingHistoryEntry[]>>({});
+  const [historyData, setHistoryData] = useState<
+    Record<string, ReceivingHistoryEntry[]>
+  >({});
 
   // Auto-dismiss toast
   useEffect(() => {
     if (toast) {
-      const t = setTimeout(() => setToast(null), 4000);
+      const t = setTimeout(() => setToast(null), 5000);
       return () => clearTimeout(t);
     }
   }, [toast]);
@@ -89,16 +96,23 @@ export default function PODetailClient({ id }: { id: string }) {
       .single();
 
     if (poErr || !poData) {
-      setToast({ message: 'Failed to load purchase order', type: 'error' });
+      setToast({
+        message: `Failed to load purchase order: ${poErr?.message || 'Not found'}`,
+        type: 'error',
+      });
       setLoading(false);
       return;
     }
 
-    const { data: items } = await supabase
+    const { data: items, error: itemsErr } = await supabase
       .from('purchase_order_items')
       .select('*')
       .eq('po_id', id)
       .order('created_at', { ascending: true });
+
+    if (itemsErr) {
+      console.error('Failed to load line items:', itemsErr);
+    }
 
     setPO(poData);
     setLineItems(items || []);
@@ -113,7 +127,9 @@ export default function PODetailClient({ id }: { id: string }) {
   const fetchHistory = async (lineItemId: string) => {
     const { data } = await supabase
       .from('receiving_line_items')
-      .select('id, quantity_received, received_at, receiving_sessions(received_by)')
+      .select(
+        'id, quantity_received, received_at, receiving_sessions(received_by)'
+      )
       .eq('po_line_item_id', lineItemId)
       .order('received_at', { ascending: false });
 
@@ -128,7 +144,7 @@ export default function PODetailClient({ id }: { id: string }) {
     }
   };
 
-  // ─── Computed Status (fixes Bug #1 and #2) ────────────────
+  // ─── Computed Status ──────────────────────────────────────
 
   const getComputedStatus = (): string => {
     if (!po) return 'draft';
@@ -136,7 +152,10 @@ export default function PODetailClient({ id }: { id: string }) {
     if (po.status === 'draft') return 'draft';
 
     const totalOrdered = lineItems.reduce((s, i) => s + i.quantity, 0);
-    const totalReceived = lineItems.reduce((s, i) => s + (i.quantity_received || 0), 0);
+    const totalReceived = lineItems.reduce(
+      (s, i) => s + (i.quantity_received || 0),
+      0
+    );
 
     if (totalOrdered === 0) return 'submitted';
     if (totalReceived === 0) return 'submitted';
@@ -167,6 +186,7 @@ export default function PODetailClient({ id }: { id: string }) {
     not_received: { label: 'Not received', cls: 'bg-gray-100 text-gray-600' },
     partial: { label: 'Partial', cls: 'bg-yellow-100 text-yellow-700' },
     received: { label: 'Received', cls: 'bg-green-100 text-green-700' },
+    backorder: { label: 'Backorder', cls: 'bg-orange-100 text-orange-700' },
   };
 
   // ─── PO Actions ───────────────────────────────────────────
@@ -177,7 +197,10 @@ export default function PODetailClient({ id }: { id: string }) {
       .update({ status: 'submitted', updated_at: new Date().toISOString() })
       .eq('id', id);
     if (error) {
-      setToast({ message: 'Failed to submit PO', type: 'error' });
+      setToast({
+        message: `Failed to submit PO: ${error.message}`,
+        type: 'error',
+      });
       return;
     }
     setToast({ message: 'Purchase order submitted!', type: 'success' });
@@ -185,13 +208,17 @@ export default function PODetailClient({ id }: { id: string }) {
   };
 
   const handleCancelPO = async () => {
-    if (!confirm('Are you sure you want to cancel this purchase order?')) return;
+    if (!confirm('Are you sure you want to cancel this purchase order?'))
+      return;
     const { error } = await supabase
       .from('purchase_orders')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('id', id);
     if (error) {
-      setToast({ message: 'Failed to cancel PO', type: 'error' });
+      setToast({
+        message: `Failed to cancel PO: ${error.message}`,
+        type: 'error',
+      });
       return;
     }
     setToast({ message: 'Purchase order cancelled', type: 'success' });
@@ -219,7 +246,6 @@ export default function PODetailClient({ id }: { id: string }) {
     const trimmed = value.trim();
     if (!trimmed) return;
 
-    // Match against SKU or barcode
     const match = lineItems.find(
       (i) =>
         i.sku?.toLowerCase() === trimmed.toLowerCase() ||
@@ -266,7 +292,10 @@ export default function PODetailClient({ id }: { id: string }) {
   const handleConfirmReceiving = async () => {
     const entries = Object.entries(receivingQtys).filter(([, qty]) => qty > 0);
     if (entries.length === 0) {
-      setToast({ message: 'Enter at least one quantity to receive', type: 'error' });
+      setToast({
+        message: 'Enter at least one quantity to receive',
+        type: 'error',
+      });
       return;
     }
 
@@ -292,7 +321,11 @@ export default function PODetailClient({ id }: { id: string }) {
       .single();
 
     if (sessErr || !session) {
-      setToast({ message: 'Failed to create receiving session', type: 'error' });
+      setToast({
+        message: `Failed to create receiving session: ${sessErr?.message || 'Unknown error'}`,
+        type: 'error',
+      });
+      console.error('Receiving session error:', sessErr);
       setReceivingLoading(false);
       return;
     }
@@ -310,12 +343,18 @@ export default function PODetailClient({ id }: { id: string }) {
       .insert(rows);
 
     if (rlErr) {
-      setToast({ message: 'Failed to save receiving records', type: 'error' });
+      setToast({
+        message: `Failed to save receiving records: ${rlErr.message}`,
+        type: 'error',
+      });
+      console.error('Receiving line items error:', rlErr);
       setReceivingLoading(false);
       return;
     }
 
     // 3 — Update each purchase_order_item with new totals
+    let updateErrors: string[] = [];
+
     for (const [lineItemId, qty] of entries) {
       const item = lineItems.find((li) => li.id === lineItemId);
       if (!item) continue;
@@ -325,7 +364,7 @@ export default function PODetailClient({ id }: { id: string }) {
       const newLineStatus =
         newReceived >= item.quantity ? 'received' : 'partial';
 
-      await supabase
+      const { error: updateErr } = await supabase
         .from('purchase_order_items')
         .update({
           quantity_received: newReceived,
@@ -335,6 +374,25 @@ export default function PODetailClient({ id }: { id: string }) {
           received_by: receivedBy,
         })
         .eq('id', lineItemId);
+
+      if (updateErr) {
+        console.error(
+          `Failed to update line item ${lineItemId}:`,
+          updateErr
+        );
+        updateErrors.push(
+          `${item.product_name}: ${updateErr.message}`
+        );
+      }
+    }
+
+    if (updateErrors.length > 0) {
+      setToast({
+        message: `Some items failed to update: ${updateErrors.join(', ')}`,
+        type: 'error',
+      });
+      setReceivingLoading(false);
+      return;
     }
 
     // 4 — Recompute & sync PO status
@@ -355,17 +413,21 @@ export default function PODetailClient({ id }: { id: string }) {
       const newStatus =
         totRec >= totOrd ? 'received' : totRec > 0 ? 'partial' : 'submitted';
 
-      await supabase
+      const { error: statusErr } = await supabase
         .from('purchase_orders')
         .update({ status: newStatus, updated_at: now })
         .eq('id', id);
+
+      if (statusErr) {
+        console.error('Failed to update PO status:', statusErr);
+      }
     }
 
     const totalQty = entries.reduce((s, [, q]) => s + q, 0);
     setIsReceiving(false);
     setReceivingLoading(false);
     setToast({
-      message: `Received ${totalQty} item${totalQty > 1 ? 's' : ''}`,
+      message: `Received ${totalQty} item${totalQty > 1 ? 's' : ''} successfully`,
       type: 'success',
     });
     fetchPO();
@@ -409,7 +471,7 @@ export default function PODetailClient({ id }: { id: string }) {
       {/* Toast */}
       {toast && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white ${
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white max-w-md ${
             toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'
           }`}
         >
@@ -562,7 +624,9 @@ export default function PODetailClient({ id }: { id: string }) {
                 className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    handleScanInput((e.target as HTMLInputElement).value);
+                    handleScanInput(
+                      (e.target as HTMLInputElement).value
+                    );
                     (e.target as HTMLInputElement).value = '';
                   }
                 }}
@@ -594,15 +658,21 @@ export default function PODetailClient({ id }: { id: string }) {
                       className={`border-b ${done ? 'opacity-50' : ''}`}
                     >
                       <td className="py-3 pr-4">
-                        <div className="font-medium">{item.product_name}</div>
+                        <div className="font-medium">
+                          {item.product_name}
+                        </div>
                         <div className="text-gray-500 text-xs">
                           {item.variant_name}
                         </div>
                       </td>
-                      <td className="py-3 pr-4 text-gray-600">{item.sku}</td>
+                      <td className="py-3 pr-4 text-gray-600">
+                        {item.sku}
+                      </td>
                       <td className="py-3 text-center">{item.quantity}</td>
                       <td className="py-3 text-center">{recv}</td>
-                      <td className="py-3 text-center">{Math.max(0, rem)}</td>
+                      <td className="py-3 text-center">
+                        {Math.max(0, rem)}
+                      </td>
                       <td className="py-3 text-center">
                         {done ? (
                           <span className="text-green-600 text-xs font-medium">
@@ -631,7 +701,10 @@ export default function PODetailClient({ id }: { id: string }) {
                               value={receivingQtys[item.id] || 0}
                               onChange={(e) => {
                                 const val = Math.min(
-                                  Math.max(0, parseInt(e.target.value) || 0),
+                                  Math.max(
+                                    0,
+                                    parseInt(e.target.value) || 0
+                                  ),
                                   rem
                                 );
                                 setReceivingQtys((prev) => ({
@@ -701,10 +774,11 @@ export default function PODetailClient({ id }: { id: string }) {
                 <th className="px-4 py-3">Product</th>
                 <th className="px-4 py-3">Variant</th>
                 <th className="px-4 py-3">SKU</th>
-                <th className="px-4 py-3 text-center">Qty Ordered</th>
+                <th className="px-4 py-3 text-center">Ordered</th>
                 <th className="px-4 py-3 text-center">Received</th>
                 <th className="px-4 py-3 text-center">Backorder</th>
                 <th className="px-4 py-3 text-center">Status</th>
+                <th className="px-4 py-3 text-center">Received At</th>
                 <th className="px-4 py-3 text-right">Cost</th>
                 <th className="px-4 py-3 text-right">Total</th>
               </tr>
@@ -713,10 +787,19 @@ export default function PODetailClient({ id }: { id: string }) {
               {lineItems.map((item) => {
                 const received = item.quantity_received || 0;
                 const backorder =
-                  received > 0 ? Math.max(0, item.quantity - received) : 0;
+                  received > 0
+                    ? Math.max(0, item.quantity - received)
+                    : 0;
                 const actualStatus = getLineStatus(item);
+
+                // Use 'backorder' style when partially received and still has remaining
+                const displayStatus =
+                  actualStatus === 'partial' && backorder > 0
+                    ? 'backorder'
+                    : actualStatus;
                 const lineStyle =
-                  lineStyleMap[actualStatus] || lineStyleMap.not_received;
+                  lineStyleMap[displayStatus] ||
+                  lineStyleMap.not_received;
                 const isExpanded = expandedRows.has(item.id);
 
                 return (
@@ -731,22 +814,39 @@ export default function PODetailClient({ id }: { id: string }) {
                       <td className="px-4 py-3 text-gray-600">
                         {item.variant_name}
                       </td>
-                      <td className="px-4 py-3 text-gray-600">{item.sku}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {item.sku}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         {item.quantity}
                       </td>
-                      <td className="px-4 py-3 text-center">{received}</td>
                       <td className="px-4 py-3 text-center">
-                        {backorder > 0 ? backorder : '—'}
+                        {received}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {backorder > 0 ? (
+                          <span className="text-orange-600 font-medium">
+                            {backorder}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <span
                           className={`px-2 py-1 rounded-full text-xs font-medium ${lineStyle.cls}`}
                         >
-                          {actualStatus === 'partial'
-                            ? `${received}/${item.quantity}`
-                            : lineStyle.label}
+                          {displayStatus === 'backorder'
+                            ? `Backorder (${backorder})`
+                            : actualStatus === 'partial'
+                              ? `${received}/${item.quantity}`
+                              : lineStyle.label}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-center text-xs text-gray-500">
+                        {item.received_at
+                          ? new Date(item.received_at).toLocaleString()
+                          : '—'}
                       </td>
                       <td className="px-4 py-3 text-right">
                         ${item.unit_cost?.toFixed(2)}
@@ -759,7 +859,7 @@ export default function PODetailClient({ id }: { id: string }) {
                     {/* Expanded Receiving History */}
                     {isExpanded && (
                       <tr>
-                        <td colSpan={9} className="px-8 py-3 bg-gray-50">
+                        <td colSpan={10} className="px-8 py-3 bg-gray-50">
                           <div className="text-xs font-medium text-gray-500 mb-2">
                             Receiving History
                           </div>
@@ -770,7 +870,9 @@ export default function PODetailClient({ id }: { id: string }) {
                                   <th className="text-left pb-1">
                                     Date &amp; Time
                                   </th>
-                                  <th className="text-center pb-1">Qty</th>
+                                  <th className="text-center pb-1">
+                                    Qty
+                                  </th>
                                   <th className="text-left pb-1">
                                     Received By
                                   </th>
@@ -787,7 +889,9 @@ export default function PODetailClient({ id }: { id: string }) {
                                     <td className="py-1 text-center">
                                       {h.quantity_received}
                                     </td>
-                                    <td className="py-1">{h.received_by}</td>
+                                    <td className="py-1">
+                                      {h.received_by}
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
