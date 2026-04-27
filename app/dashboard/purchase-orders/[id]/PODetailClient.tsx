@@ -491,7 +491,7 @@ export default function PODetailClient({ id }: { id: string }) {
     const closedBy = user?.email || 'Unknown';
 
     // Mark dropped items
-    for (const itemId of droppedItems) {
+    for (const itemId of Array.from(droppedItems)) {
       const { error } = await supabase
         .from('purchase_order_items')
         .update({
