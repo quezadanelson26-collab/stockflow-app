@@ -40,6 +40,7 @@ interface POLineItem {
   received_by: string | null;
   backorder_qty: number;
   line_status: string;
+  added_during_receiving?: boolean;
 }
 
 interface ReceivingHistoryEntry {
@@ -80,6 +81,17 @@ export default function PODetailClient({ id }: { id: string }) {
   const [closeNote, setCloseNote] = useState('');
   const [closingLoading, setClosingLoading] = useState(false);
   const [droppedItems, setDroppedItems] = useState<Set<string>>(new Set());
+
+  // Add-during-receiving state
+  const [addItemPrompt, setAddItemPrompt] = useState<{
+    product_name: string;
+    variant_name: string;
+    sku: string;
+    barcode: string;
+    cost_price: number;
+    product_id: string;
+    variant_id: string;
+  } | null>(null);
 
   // History state
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -269,40 +281,160 @@ export default function PODetailClient({ id }: { id: string }) {
     setReceivingMode('manual');
   };
 
-  const handleScanInput = (value: string) => {
+  const handleScanInput = async (value: string) => {
     const trimmed = value.trim();
     if (!trimmed) return;
 
+    // 1. Check if barcode/SKU matches an existing line item on this PO
     const match = lineItems.find(
       (i) =>
         i.sku?.toLowerCase() === trimmed.toLowerCase() ||
         i.barcode?.toLowerCase() === trimmed.toLowerCase()
     );
 
-    if (!match) {
+    if (match) {
+      const remaining = match.quantity - (match.quantity_received || 0);
+      const current = receivingQtys[match.id] || 0;
+
+      // For items added during receiving, allow unlimited re-scanning
+      if (match.added_during_receiving && current >= remaining) {
+        setLineItems((prev) =>
+          prev.map((i) =>
+            i.id === match.id ? { ...i, quantity: i.quantity + 1 } : i
+          )
+        );
+        setReceivingQtys((prev) => ({ ...prev, [match.id]: current + 1 }));
+        setToast({
+          message: `+1  ${match.product_name} — ${match.variant_name}`,
+          type: 'success',
+        });
+        return;
+      }
+
+      if (remaining > 0 && current >= remaining) {
+        setToast({
+          message: `${match.product_name} (${match.variant_name}) already fully accounted for`,
+          type: 'error',
+        });
+        return;
+      }
+
+      setReceivingQtys((prev) => ({ ...prev, [match.id]: current + 1 }));
       setToast({
-        message: `"${trimmed}" doesn't match any item in this PO`,
+        message: `+1  ${match.product_name} — ${match.variant_name}`,
+        type: 'success',
+      });
+      return;
+    }
+
+    // 2. Not on PO — look up in product_variants table
+    const { data: variantData } = await supabase
+      .from('product_variants')
+      .select(`
+        id,
+        product_id,
+        sku,
+        barcode,
+        title,
+        option1,
+        option2,
+        option3,
+        cost_price,
+        products!inner (
+          id,
+          title,
+          vendor
+        )
+      `)
+      .or(`barcode.eq.${trimmed},sku.eq.${trimmed}`)
+      .limit(1);
+
+    if (!variantData || variantData.length === 0) {
+      setToast({ message: `Barcode "${trimmed}" not found`, type: 'error' });
+      return;
+    }
+
+    const found = variantData[0] as any;
+    const foundVendor = found.products?.vendor || '';
+
+    // 3. Wrong vendor?
+    if (foundVendor.toLowerCase() !== po?.vendor?.toLowerCase()) {
+      setToast({
+        message: `This item belongs to ${foundVendor}, not ${po?.vendor}`,
         type: 'error',
       });
       return;
     }
 
-    const remaining = match.quantity - (match.quantity_received || 0);
-    const current = receivingQtys[match.id] || 0;
+    // 4. Same vendor — prompt to add
+    const variantName =
+      found.title ||
+      [found.option1, found.option2, found.option3].filter(Boolean).join(' / ') ||
+      'Default';
 
-    if (current >= remaining) {
+    setAddItemPrompt({
+      product_name: found.products?.title || '',
+      variant_name: variantName,
+      sku: found.sku || '',
+      barcode: found.barcode || '',
+      cost_price: found.cost_price || 0,
+      product_id: found.product_id,
+      variant_id: found.id,
+    });
+  };
+
+  const handleConfirmAddItem = async () => {
+    if (!addItemPrompt) return;
+
+    // Insert new line item into purchase_order_items
+    const { data: newItem, error: insertErr } = await supabase
+      .from('purchase_order_items')
+      .insert({
+        po_id: id,
+        product_id: addItemPrompt.product_id,
+        variant_id: addItemPrompt.variant_id,
+        product_name: addItemPrompt.product_name,
+        variant_name: addItemPrompt.variant_name,
+        sku: addItemPrompt.sku,
+        barcode: addItemPrompt.barcode,
+        quantity: 1,
+        unit_cost: addItemPrompt.cost_price,
+        quantity_received: 0,
+        backorder_qty: 0,
+        line_status: 'not_received',
+        added_during_receiving: true,
+      })
+      .select()
+      .single();
+
+    if (insertErr || !newItem) {
       setToast({
-        message: `${match.product_name} (${match.variant_name}) already fully accounted for`,
+        message: `Failed to add item: ${insertErr?.message || 'Unknown error'}`,
         type: 'error',
       });
+      setAddItemPrompt(null);
       return;
     }
 
-    setReceivingQtys((prev) => ({ ...prev, [match.id]: current + 1 }));
+    // Update PO totals
+    await supabase
+      .from('purchase_orders')
+      .update({
+        total_items: (po?.total_items || 0) + 1,
+        total_cost: (po?.total_cost || 0) + addItemPrompt.cost_price,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id);
+
+    // Add the new item to local state and set receiving qty to 1
+    setLineItems((prev) => [...prev, newItem as POLineItem]);
+    setReceivingQtys((prev) => ({ ...prev, [newItem.id]: 1 }));
+
     setToast({
-      message: `+1  ${match.product_name} — ${match.variant_name}`,
+      message: `Added ${addItemPrompt.product_name} — ${addItemPrompt.variant_name} to PO`,
       type: 'success',
     });
+    setAddItemPrompt(null);
   };
 
   const handleReceiveAll = () => {
@@ -388,19 +520,32 @@ export default function PODetailClient({ id }: { id: string }) {
       if (!item) continue;
 
       const newReceived = (item.quantity_received || 0) + qty;
-      const newBackorder = Math.max(0, item.quantity - newReceived);
+
+      // For items added during receiving, sync the ordered quantity
+      // to match what was actually received (since we started at qty=1)
+      const effectiveQty = item.added_during_receiving
+        ? Math.max(item.quantity, newReceived)
+        : item.quantity;
+      const newBackorder = Math.max(0, effectiveQty - newReceived);
       const newLineStatus =
-        newReceived >= item.quantity ? 'received' : 'partial';
+        newReceived >= effectiveQty ? 'received' : 'partial';
+
+      const updatePayload: any = {
+        quantity_received: newReceived,
+        backorder_qty: newBackorder,
+        line_status: newLineStatus,
+        received_at: now,
+        received_by: receivedBy,
+      };
+
+      // Persist the updated quantity for added-during-receiving items
+      if (item.added_during_receiving) {
+        updatePayload.quantity = effectiveQty;
+      }
 
       const { error: updateErr } = await supabase
         .from('purchase_order_items')
-        .update({
-          quantity_received: newReceived,
-          backorder_qty: newBackorder,
-          line_status: newLineStatus,
-          received_at: now,
-          received_by: receivedBy,
-        })
+        .update(updatePayload)
         .eq('id', lineItemId);
 
       if (updateErr) {
@@ -944,6 +1089,51 @@ export default function PODetailClient({ id }: { id: string }) {
       )}
 
       {/* ══════════════════════════════════════════════════ */}
+      {/* ADD ITEM DURING RECEIVING PROMPT                  */}
+      {/* ══════════════════════════════════════════════════ */}
+      {addItemPrompt && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h2 className="text-lg font-semibold mb-1">Item Not on This PO</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              This item was found but is not listed on this purchase order. Add it?
+            </p>
+
+            <div className="bg-gray-50 rounded-lg p-4 mb-4">
+              <p className="font-medium text-gray-900">{addItemPrompt.product_name}</p>
+              <p className="text-sm text-gray-600">{addItemPrompt.variant_name}</p>
+              {addItemPrompt.sku && (
+                <p className="text-xs text-gray-400 mt-1">SKU: {addItemPrompt.sku}</p>
+              )}
+              <p className="text-sm font-medium mt-2">
+                Cost: ${addItemPrompt.cost_price.toFixed(2)}
+              </p>
+            </div>
+
+            <p className="text-xs text-gray-400 mb-4">
+              This item will be added to the PO and marked as received. It will show an
+              &quot;Added during receiving&quot; badge for audit purposes.
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setAddItemPrompt(null)}
+                className="px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmAddItem}
+                className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 text-sm font-medium"
+              >
+                Yes, Add to PO
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════ */}
       {/* CLOSE PO MODAL                                    */}
       {/* ══════════════════════════════════════════════════ */}
       {isClosing && (
@@ -1079,6 +1269,11 @@ export default function PODetailClient({ id }: { id: string }) {
                     >
                       <td className="px-4 py-3 font-medium">
                         {item.product_name}
+                        {item.added_during_receiving && (
+                          <span className="ml-2 text-xs bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-medium">
+                            Added during receiving
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-600">
                         {item.variant_name}
