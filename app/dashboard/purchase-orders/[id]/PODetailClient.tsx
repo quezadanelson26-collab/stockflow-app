@@ -240,7 +240,18 @@ export default function PODetailClient({ id }: { id: string }) {
     fetchPO();
   };
 
-  const handleEditPO = () => {
+  const handleEditPO = async () => {
+    // If PO is submitted, revert to draft before editing
+    if (computedStatus === 'submitted') {
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({ status: 'draft', updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) {
+        setToast({ message: 'Failed to revert PO to draft', type: 'error' });
+        return;
+      }
+    }
     router.push(`/dashboard/purchase-orders/create?edit=${id}`);
   };
 
@@ -686,7 +697,29 @@ export default function PODetailClient({ id }: { id: string }) {
             </button>
           </>
         )}
-        {(computedStatus === 'submitted' || computedStatus === 'partial') && (
+        {computedStatus === 'submitted' && (
+          <>
+            <button
+              onClick={handleEditPO}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Edit PO
+            </button>
+            <button
+              onClick={handleStartReceiving}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+            >
+              Receive Items
+            </button>
+            <button
+              onClick={handleCancelPO}
+              className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200"
+            >
+              Cancel PO
+            </button>
+          </>
+        )}
+        {computedStatus === 'partial' && (
           <>
             <button
               onClick={handleStartReceiving}
@@ -694,22 +727,12 @@ export default function PODetailClient({ id }: { id: string }) {
             >
               Receive Items
             </button>
-            {computedStatus === 'partial' && (
-              <button
-                onClick={handleOpenClose}
-                className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200"
-              >
-                Close PO
-              </button>
-            )}
-            {computedStatus === 'submitted' && (
-              <button
-                onClick={handleCancelPO}
-                className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200"
-              >
-                Cancel PO
-              </button>
-            )}
+            <button
+              onClick={handleOpenClose}
+              className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200"
+            >
+              Close PO
+            </button>
           </>
         )}
         {computedStatus === 'received' && (
@@ -720,6 +743,11 @@ export default function PODetailClient({ id }: { id: string }) {
         {computedStatus === 'closed' && (
           <span className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg font-medium">
             Closed
+          </span>
+        )}
+        {computedStatus === 'cancelled' && (
+          <span className="px-4 py-2 bg-red-100 text-red-700 rounded-lg font-medium">
+            Cancelled
           </span>
         )}
       </div>
