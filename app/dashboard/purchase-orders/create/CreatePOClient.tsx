@@ -140,9 +140,9 @@ export default function CreatePOClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editId]);
 
-  // Check for duplicate open POs when vendor changes
+  // Check for duplicate open POs when vendor changes (only for new POs)
   useEffect(() => {
-    if (!vendor) {
+    if (!vendor || isEditMode) {
       setDuplicatePOWarning('');
       return;
     }
@@ -154,14 +154,9 @@ export default function CreatePOClient() {
         .in('status', ['draft', 'submitted'])
         .limit(5);
 
-      // In edit mode, filter out the current PO from duplicate check
-      const duplicates = isEditMode
-        ? data?.filter((d: any) => d.id !== editId)
-        : data;
-
-      if (duplicates && duplicates.length > 0) {
+      if (data && data.length > 0) {
         setDuplicatePOWarning(
-          `You already have ${duplicates[0].po_number} open for ${vendor}. Continue anyway?`
+          `You already have ${data[0].po_number} open for ${vendor}. Continue anyway?`
         );
       } else {
         setDuplicatePOWarning('');
