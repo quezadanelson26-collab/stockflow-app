@@ -1,0 +1,942 @@
+'use client';
+
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { createClient } from '@/lib/supabase/client';
+
+// ─── Types ──────────────────────────────────────────────────
+
+interface SessionItem {
+  key: string;
+  barcode: string;
+  product_name: string;
+  variant_name: string;
+  sku: string;
+  variant_id: string;
+  product_id: string;
+  vendor: string;
+  po_id: string | null;
+  po_number: string | null;
+  line_item_id: string | null;
+  quantity: number;
+  unit_cost: number;
+  ordered_qty: number;
+  already_received: number;
+  added_during_receiving: boolean;
+}
+
+interface POChoice {
+  po_id: string;
+  po_number: string;
+  line_item_id: string;
+  ordered_qty: number;
+  already_received: number;
+  remaining: number;
+  unit_cost: number;
+}
+
+interface VariantInfo {
+  product_name: string;
+  variant_name: string;
+  barcode: string;
+  sku: string;
+  variant_id: string;
+  product_id: string;
+  vendor: string;
+  unit_cost: number;
+}
+
+type Phase = 'idle' | 'scanning' | 'reviewing' | 'processing' | 'done';
+
+// ─── Component ──────────────────────────────────────────────
+
+export default function ReceivingClient() {
+  const supabase = createClient();
+
+  // Phase
+  const [phase, setPhase] = useState<Phase>('idle');
+
+  // Session data
+  const [sessionItems, setSessionItems] = useState<Record<string, SessionItem>>(
+    {}
+  );
+  const [scanCount, setScanCount] = useState(0);
+
+  // UI
+  const [toast, setToast] = useState<{
+    message: string;
+    type: 'success' | 'error' | 'info';
+  } | null>(null);
+  const scanRef = useRef<HTMLInputElement>(null);
+
+  // PO picker modal
+  const [poPickerData, setPoPickerData] = useState<{
+    variant: VariantInfo;
+    choices: POChoice[];
+  } | null>(null);
+
+  // Processing results
+  const [processResults, setProcessResults] = useState<{
+    posUpdated: number;
+    itemsReceived: number;
+    quickPOCreated: string | null;
+  } | null>(null);
+
+  // ─── Effects ────────────────────────────────────────────
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (phase === 'scanning' && scanRef.current) {
+      scanRef.current.focus();
+    }
+  }, [phase]);
+
+  // ─── Computed ───────────────────────────────────────────
+
+  const groupedByPO = useMemo(() => {
+    const groups: Record<
+      string,
+      {
+        po_id: string | null;
+        po_number: string | null;
+        vendor: string;
+        items: SessionItem[];
+      }
+    > = {};
+
+    Object.values(sessionItems).forEach((item) => {
+      const groupKey = item.po_id || `no_po__${item.vendor}`;
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          po_id: item.po_id,
+          po_number: item.po_number,
+          vendor: item.vendor,
+          items: [],
+        };
+      }
+      groups[groupKey].items.push(item);
+    });
+
+    return groups;
+  }, [sessionItems]);
+
+  const totalScanned = Object.values(sessionItems).reduce(
+    (sum, i) => sum + i.quantity,
+    0
+  );
+  const poCount = new Set(
+    Object.values(sessionItems)
+      .filter((i) => i.po_id)
+      .map((i) => i.po_id)
+  ).size;
+
+  // ─── Session Handlers ──────────────────────────────────
+
+  const handleStartSession = () => {
+    setSessionItems({});
+    setScanCount(0);
+    setProcessResults(null);
+    setPhase('scanning');
+  };
+
+  const handleEndSession = () => {
+    if (Object.keys(sessionItems).length === 0) {
+      setToast({ message: 'No items scanned yet', type: 'error' });
+      return;
+    }
+    setPhase('reviewing');
+  };
+
+  // ─── Add to Session Helper ─────────────────────────────
+
+  const addToSession = (params: Omit<SessionItem, 'key' | 'quantity'>) => {
+    const key = `${params.po_id || 'no_po'}__${params.variant_id}`;
+
+    setSessionItems((prev) => {
+      if (prev[key]) {
+        return {
+          ...prev,
+          [key]: { ...prev[key], quantity: prev[key].quantity + 1 },
+        };
+      }
+      return {
+        ...prev,
+        [key]: { ...params, key, quantity: 1 },
+      };
+    });
+  };
+
+  // ─── Scan Handler ──────────────────────────────────────
+
+  const handleScan = async (value: string) => {
+    const barcode = value.trim();
+    if (!barcode) return;
+
+    setScanCount((c) => c + 1);
+
+    // 1. Look up variant by barcode or SKU
+    const { data: variants } = await supabase
+      .from('product_variants')
+      .select(
+        `
+        id, product_id, sku, barcode, title,
+        option1, option2, option3, cost_price,
+        products!inner ( id, title, vendor )
+      `
+      )
+      .or(`barcode.eq.${barcode},sku.eq.${barcode}`)
+      .limit(1);
+
+    if (!variants || variants.length === 0) {
+      setToast({ message: `Barcode "${barcode}" not found`, type: 'error' });
+      return;
+    }
+
+    const v = variants[0] as any;
+    const productName = v.products?.title || '';
+    const vendor = v.products?.vendor || '';
+    const variantName =
+      v.title ||
+      [v.option1, v.option2, v.option3].filter(Boolean).join(' / ') ||
+      'Default';
+
+    // 2. Find ALL PO line items for this variant, filter in JS
+    const { data: poItems } = await supabase
+      .from('purchase_order_items')
+      .select(
+        `
+        id, po_id, quantity, quantity_received, unit_cost,
+        purchase_orders!inner ( id, po_number, vendor, status )
+      `
+      )
+      .eq('variant_id', v.id);
+
+    // Filter to open POs with remaining qty (accounting for session)
+    const matchingItems = (poItems || [])
+      .filter(
+        (pi: any) =>
+          pi.purchase_orders &&
+          ['submitted', 'partial'].includes(pi.purchase_orders.status)
+      )
+      .map((pi: any) => {
+        const sessionKey = `${pi.po_id}__${v.id}`;
+        const sessionQty = sessionItems[sessionKey]?.quantity || 0;
+        const remaining =
+          pi.quantity - (pi.quantity_received || 0) - sessionQty;
+        return {
+          po_id: pi.po_id,
+          po_number: pi.purchase_orders.po_number,
+          line_item_id: pi.id,
+          ordered_qty: pi.quantity,
+          already_received: pi.quantity_received || 0,
+          remaining,
+          unit_cost: pi.unit_cost,
+        };
+      })
+      .filter((pi: any) => pi.remaining > 0);
+
+    // 3. Route based on matches
+    if (matchingItems.length === 1) {
+      const match = matchingItems[0];
+      addToSession({
+        barcode,
+        product_name: productName,
+        variant_name: variantName,
+        sku: v.sku || '',
+        variant_id: v.id,
+        product_id: v.product_id,
+        vendor,
+        po_id: match.po_id,
+        po_number: match.po_number,
+        line_item_id: match.line_item_id,
+        unit_cost: match.unit_cost,
+        ordered_qty: match.ordered_qty,
+        already_received: match.already_received,
+        added_during_receiving: false,
+      });
+      setToast({
+        message: `+1 ${productName} — ${variantName} → ${match.po_number}`,
+        type: 'success',
+      });
+    } else if (matchingItems.length > 1) {
+      setPoPickerData({
+        variant: {
+          product_name: productName,
+          variant_name: variantName,
+          barcode,
+          sku: v.sku || '',
+          variant_id: v.id,
+          product_id: v.product_id,
+          vendor,
+          unit_cost: v.cost_price || 0,
+        },
+        choices: matchingItems,
+      });
+    } else {
+      // No matching PO — add to "no PO" bucket
+      const noPOKey = `no_po__${v.id}`;
+      if (sessionItems[noPOKey]) {
+        setSessionItems((prev) => ({
+          ...prev,
+          [noPOKey]: { ...prev[noPOKey], quantity: prev[noPOKey].quantity + 1 },
+        }));
+        setToast({
+          message: `+1 ${productName} — ${variantName} (no matching PO)`,
+          type: 'info',
+        });
+      } else {
+        setSessionItems((prev) => ({
+          ...prev,
+          [noPOKey]: {
+            key: noPOKey,
+            barcode,
+            product_name: productName,
+            variant_name: variantName,
+            sku: v.sku || '',
+            variant_id: v.id,
+            product_id: v.product_id,
+            vendor,
+            po_id: null,
+            po_number: null,
+            line_item_id: null,
+            quantity: 1,
+            unit_cost: v.cost_price || 0,
+            ordered_qty: 0,
+            already_received: 0,
+            added_during_receiving: true,
+          },
+        }));
+        setToast({
+          message: `${productName} — ${variantName} not on any open PO`,
+          type: 'info',
+        });
+      }
+    }
+  };
+
+  // ─── PO Picker Handler ─────────────────────────────────
+
+  const handlePickPO = (choice: POChoice) => {
+    if (!poPickerData) return;
+    const vv = poPickerData.variant;
+
+    addToSession({
+      barcode: vv.barcode,
+      product_name: vv.product_name,
+      variant_name: vv.variant_name,
+      sku: vv.sku,
+      variant_id: vv.variant_id,
+      product_id: vv.product_id,
+      vendor: vv.vendor,
+      po_id: choice.po_id,
+      po_number: choice.po_number,
+      line_item_id: choice.line_item_id,
+      unit_cost: choice.unit_cost || vv.unit_cost,
+      ordered_qty: choice.ordered_qty,
+      already_received: choice.already_received,
+      added_during_receiving: false,
+    });
+
+    setToast({
+      message: `+1 ${vv.product_name} — ${vv.variant_name} → ${choice.po_number}`,
+      type: 'success',
+    });
+    setPoPickerData(null);
+  };
+
+  // ─── Confirm Receiving ─────────────────────────────────
+
+  const handleConfirm = async () => {
+    setPhase('processing');
+    const now = new Date().toISOString();
+    const receivedBy = 'staff';
+
+    const posUpdated = new Set<string>();
+    let itemsReceived = 0;
+    let quickPOCreated: string | null = null;
+
+    try {
+      // Split items: with PO vs without PO
+      const byPO: Record<string, SessionItem[]> = {};
+      const noPOItems: SessionItem[] = [];
+
+      Object.values(sessionItems).forEach((item) => {
+        if (item.po_id) {
+          if (!byPO[item.po_id]) byPO[item.po_id] = [];
+          byPO[item.po_id].push(item);
+        } else {
+          noPOItems.push(item);
+        }
+      });
+
+      // ── Process existing PO items ──────────────────────
+      for (const [poId, items] of Object.entries(byPO)) {
+        for (const item of items) {
+          const newReceived = item.already_received + item.quantity;
+          const newBackorder = Math.max(0, item.ordered_qty - newReceived);
+          const lineStatus =
+            newReceived >= item.ordered_qty ? 'received' : 'partial';
+
+          await supabase
+            .from('purchase_order_items')
+            .update({
+              quantity_received: newReceived,
+              backorder_qty: newBackorder,
+              line_status: lineStatus,
+              received_at: now,
+              received_by: receivedBy,
+            })
+            .eq('id', item.line_item_id);
+
+          await supabase.from('receiving_history').insert({
+            po_item_id: item.line_item_id,
+            quantity_received: item.quantity,
+            received_at: now,
+            received_by: receivedBy,
+          });
+
+          itemsReceived += item.quantity;
+        }
+
+        // Recalculate PO status
+        const { data: allItems } = await supabase
+          .from('purchase_order_items')
+          .select('quantity, quantity_received')
+          .eq('po_id', poId);
+
+        if (allItems) {
+          const allDone = allItems.every(
+            (i: any) => (i.quantity_received || 0) >= i.quantity
+          );
+          const anyDone = allItems.some(
+            (i: any) => (i.quantity_received || 0) > 0
+          );
+          const newStatus = allDone
+            ? 'received'
+            : anyDone
+              ? 'partial'
+              : 'submitted';
+
+          await supabase
+            .from('purchase_orders')
+            .update({ status: newStatus, updated_at: now })
+            .eq('id', poId);
+        }
+
+        posUpdated.add(poId);
+      }
+
+      // ── Process items without PO — Quick PO ────────────
+      if (noPOItems.length > 0) {
+        const byVendor: Record<string, SessionItem[]> = {};
+        noPOItems.forEach((item) => {
+          if (!byVendor[item.vendor]) byVendor[item.vendor] = [];
+          byVendor[item.vendor].push(item);
+        });
+
+        for (const [vendor, vendorItems] of Object.entries(byVendor)) {
+          const year = new Date().getFullYear();
+          const { count } = await supabase
+            .from('purchase_orders')
+            .select('*', { count: 'exact', head: true });
+
+          const poNumber = `PO-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+          const totalCost = vendorItems.reduce(
+            (sum, i) => sum + i.unit_cost * i.quantity,
+            0
+          );
+          const totalItems = vendorItems.reduce(
+            (sum, i) => sum + i.quantity,
+            0
+          );
+
+          const { data: newPO } = await supabase
+            .from('purchase_orders')
+            .insert({
+              po_number: poNumber,
+              vendor,
+              status: 'received',
+              total_items: totalItems,
+              total_cost: totalCost,
+              notes: 'Quick PO — created during receiving',
+              created_at: now,
+              updated_at: now,
+            })
+            .select()
+            .single();
+
+          if (!newPO) continue;
+          quickPOCreated = newPO.po_number;
+
+          for (const item of vendorItems) {
+            const { data: lineItem } = await supabase
+              .from('purchase_order_items')
+              .insert({
+                po_id: newPO.id,
+                product_id: item.product_id,
+                variant_id: item.variant_id,
+                product_name: item.product_name,
+                variant_name: item.variant_name,
+                sku: item.sku,
+                barcode: item.barcode,
+                quantity: item.quantity,
+                unit_cost: item.unit_cost,
+                quantity_received: item.quantity,
+                backorder_qty: 0,
+                line_status: 'received',
+                added_during_receiving: true,
+                received_at: now,
+                received_by: receivedBy,
+              })
+              .select()
+              .single();
+
+            if (lineItem) {
+              await supabase.from('receiving_history').insert({
+                po_item_id: lineItem.id,
+                quantity_received: item.quantity,
+                received_at: now,
+                received_by: receivedBy,
+              });
+            }
+            itemsReceived += item.quantity;
+          }
+          posUpdated.add(newPO.id);
+        }
+      }
+
+      setProcessResults({
+        posUpdated: posUpdated.size,
+        itemsReceived,
+        quickPOCreated,
+      });
+      setPhase('done');
+    } catch (err) {
+      setToast({
+        message: 'Error processing receiving session',
+        type: 'error',
+      });
+      setPhase('reviewing');
+    }
+  };
+
+  // ─── Render ─────────────────────────────────────────────
+
+  return (
+    <div className="max-w-4xl">
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
+            toast.type === 'success'
+              ? 'bg-green-600 text-white'
+              : toast.type === 'error'
+                ? 'bg-red-600 text-white'
+                : 'bg-blue-600 text-white'
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">Receiving</h1>
+          <p className="text-gray-500 text-sm mt-1">
+            Scan items to receive — auto-matched to open purchase orders
+          </p>
+        </div>
+        {phase === 'idle' && (
+          <button
+            onClick={handleStartSession}
+            className="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+          >
+            Start Receiving Session
+          </button>
+        )}
+        {phase === 'scanning' && (
+          <div className="flex gap-3">
+            <button
+              onClick={handleEndSession}
+              className="bg-green-600 text-white px-5 py-2.5 rounded-lg hover:bg-green-700 transition-colors font-medium"
+            >
+              End Session &amp; Review
+            </button>
+            <button
+              onClick={() => {
+                setPhase('idle');
+                setSessionItems({});
+                setScanCount(0);
+              }}
+              className="px-4 py-2.5 border rounded-lg hover:bg-gray-50 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* IDLE PHASE                                         */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {phase === 'idle' && (
+        <div className="bg-white rounded-xl border p-12 text-center">
+          <div className="text-6xl mb-4">📦</div>
+          <h2 className="text-xl font-semibold mb-2">Ready to Receive</h2>
+          <p className="text-gray-500 max-w-md mx-auto">
+            Click &quot;Start Receiving Session&quot; to begin scanning items.
+            The system will automatically match barcodes to open purchase
+            orders.
+          </p>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* SCANNING PHASE                                     */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {phase === 'scanning' && (
+        <>
+          {/* Scan Input */}
+          <div className="bg-white rounded-xl border p-4 mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">📷</span>
+              <input
+                ref={scanRef}
+                type="text"
+                placeholder="Scan barcode or type SKU..."
+                className="flex-1 text-lg px-4 py-3 border-2 border-blue-300 rounded-lg focus:outline-none focus:border-blue-500 font-mono"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleScan((e.target as HTMLInputElement).value);
+                    (e.target as HTMLInputElement).value = '';
+                  }
+                }}
+              />
+            </div>
+            {/* Stats */}
+            <div className="flex gap-6 mt-3 text-sm">
+              <span className="text-gray-500">
+                Scans:{' '}
+                <span className="font-semibold text-gray-900">{scanCount}</span>
+              </span>
+              <span className="text-gray-500">
+                Items:{' '}
+                <span className="font-semibold text-gray-900">
+                  {totalScanned}
+                </span>
+              </span>
+              <span className="text-gray-500">
+                POs:{' '}
+                <span className="font-semibold text-gray-900">{poCount}</span>
+              </span>
+              {Object.values(sessionItems).some((i) => !i.po_id) && (
+                <span className="text-amber-600 font-medium">
+                  ⚠{' '}
+                  {Object.values(sessionItems).filter((i) => !i.po_id).length}{' '}
+                  item(s) without PO
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Scanned Items Grouped by PO */}
+          {Object.keys(groupedByPO).length > 0 && (
+            <div className="space-y-4">
+              {Object.entries(groupedByPO).map(([groupKey, group]) => (
+                <div
+                  key={groupKey}
+                  className="bg-white rounded-xl border overflow-hidden"
+                >
+                  <div
+                    className={`px-4 py-3 border-b flex items-center justify-between ${
+                      group.po_id ? 'bg-blue-50' : 'bg-amber-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {group.po_id ? (
+                        <span className="bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded">
+                          {group.po_number}
+                        </span>
+                      ) : (
+                        <span className="bg-amber-500 text-white text-xs font-bold px-2 py-1 rounded">
+                          No PO
+                        </span>
+                      )}
+                      <span className="text-sm font-medium text-gray-600">
+                        {group.vendor}
+                      </span>
+                    </div>
+                    <span className="text-sm text-gray-500">
+                      {group.items.reduce((s, i) => s + i.quantity, 0)} item(s)
+                    </span>
+                  </div>
+                  <div className="divide-y">
+                    {group.items.map((item) => (
+                      <div
+                        key={item.key}
+                        className="px-4 py-3 flex items-center justify-between"
+                      >
+                        <div>
+                          <p className="font-medium text-sm">
+                            {item.product_name}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {item.variant_name}
+                          </p>
+                          {item.sku && (
+                            <p className="text-xs text-gray-400">
+                              SKU: {item.sku}
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <span className="text-lg font-bold text-gray-900">
+                            ×{item.quantity}
+                          </span>
+                          {item.po_id && (
+                            <p className="text-xs text-gray-400">
+                              of {item.ordered_qty} ordered
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {Object.keys(sessionItems).length === 0 && (
+            <div className="bg-white rounded-xl border p-8 text-center text-gray-400">
+              <p className="text-lg">Start scanning items...</p>
+              <p className="text-sm mt-1">
+                Each barcode will be automatically matched to an open PO
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* REVIEWING PHASE                                    */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {phase === 'reviewing' && (
+        <>
+          <div className="bg-white rounded-xl border p-6 mb-4">
+            <h2 className="text-lg font-semibold mb-4">
+              📋 Receiving Summary
+            </h2>
+
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className="bg-blue-50 rounded-lg p-4 text-center">
+                <p className="text-2xl font-bold text-blue-700">
+                  {totalScanned}
+                </p>
+                <p className="text-sm text-blue-600">Total Items</p>
+              </div>
+              <div className="bg-green-50 rounded-lg p-4 text-center">
+                <p className="text-2xl font-bold text-green-700">{poCount}</p>
+                <p className="text-sm text-green-600">POs Updated</p>
+              </div>
+              {Object.values(sessionItems).some((i) => !i.po_id) && (
+                <div className="bg-amber-50 rounded-lg p-4 text-center">
+                  <p className="text-2xl font-bold text-amber-700">
+                    {Object.values(sessionItems)
+                      .filter((i) => !i.po_id)
+                      .reduce((s, i) => s + i.quantity, 0)}
+                  </p>
+                  <p className="text-sm text-amber-600">Quick PO Items</p>
+                </div>
+              )}
+            </div>
+
+            {/* Detailed breakdown */}
+            <div className="space-y-4">
+              {Object.entries(groupedByPO).map(([groupKey, group]) => (
+                <div
+                  key={groupKey}
+                  className="border rounded-lg overflow-hidden"
+                >
+                  <div
+                    className={`px-4 py-2.5 flex items-center justify-between border-b ${
+                      group.po_id ? 'bg-blue-50' : 'bg-amber-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {group.po_id ? (
+                        <span className="bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded">
+                          {group.po_number}
+                        </span>
+                      ) : (
+                        <span className="bg-amber-500 text-white text-xs font-bold px-2 py-1 rounded">
+                          Quick PO will be created
+                        </span>
+                      )}
+                      <span className="text-sm text-gray-600">
+                        {group.vendor}
+                      </span>
+                    </div>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left px-4 py-2 text-xs text-gray-500 uppercase">
+                          Product
+                        </th>
+                        <th className="text-left px-4 py-2 text-xs text-gray-500 uppercase">
+                          Variant
+                        </th>
+                        <th className="text-center px-4 py-2 text-xs text-gray-500 uppercase">
+                          Receiving
+                        </th>
+                        <th className="text-right px-4 py-2 text-xs text-gray-500 uppercase">
+                          Cost
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {group.items.map((item) => (
+                        <tr key={item.key}>
+                          <td className="px-4 py-2 font-medium">
+                            {item.product_name}
+                          </td>
+                          <td className="px-4 py-2 text-gray-600">
+                            {item.variant_name}
+                          </td>
+                          <td className="px-4 py-2 text-center font-semibold">
+                            {item.quantity}
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            ${(item.unit_cost * item.quantity).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setPhase('scanning')}
+              className="px-5 py-2.5 border rounded-lg hover:bg-gray-50"
+            >
+              ← Back to Scanning
+            </button>
+            <button
+              onClick={handleConfirm}
+              className="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
+            >
+              ✓ Confirm Receiving
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* PROCESSING PHASE                                   */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {phase === 'processing' && (
+        <div className="bg-white rounded-xl border p-12 text-center">
+          <div className="animate-spin text-4xl mb-4">⏳</div>
+          <h2 className="text-lg font-semibold">Processing...</h2>
+          <p className="text-gray-500 text-sm mt-1">
+            Updating purchase orders and inventory
+          </p>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* DONE PHASE                                         */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {phase === 'done' && processResults && (
+        <div className="bg-white rounded-xl border p-8 text-center">
+          <div className="text-5xl mb-4">✅</div>
+          <h2 className="text-xl font-semibold mb-2">Receiving Complete</h2>
+          <div className="flex justify-center gap-6 mb-6">
+            <div>
+              <span className="text-2xl font-bold text-green-700">
+                {processResults.itemsReceived}
+              </span>
+              <p className="text-sm text-gray-500">Items Received</p>
+            </div>
+            <div>
+              <span className="text-2xl font-bold text-blue-700">
+                {processResults.posUpdated}
+              </span>
+              <p className="text-sm text-gray-500">POs Updated</p>
+            </div>
+          </div>
+          {processResults.quickPOCreated && (
+            <p className="text-sm text-amber-600 mb-4">
+              📋 Quick PO{' '}
+              <strong>{processResults.quickPOCreated}</strong> was created for
+              items without an existing PO
+            </p>
+          )}
+          <button
+            onClick={handleStartSession}
+            className="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 font-medium"
+          >
+            Start New Session
+          </button>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* PO PICKER MODAL                                    */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {poPickerData && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <h2 className="text-lg font-semibold mb-1">
+              Item Found on Multiple POs
+            </h2>
+            <p className="text-sm text-gray-500 mb-4">
+              <strong>{poPickerData.variant.product_name}</strong> —{' '}
+              {poPickerData.variant.variant_name}
+            </p>
+            <p className="text-sm text-gray-600 mb-4">
+              Which PO should this item be received against?
+            </p>
+            <div className="space-y-2 mb-4">
+              {poPickerData.choices.map((choice) => (
+                <button
+                  key={choice.po_id}
+                  onClick={() => handlePickPO(choice)}
+                  className="w-full text-left border rounded-lg p-4 hover:bg-blue-50 hover:border-blue-300 transition-colors"
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-blue-600">
+                      {choice.po_number}
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      {choice.already_received} of {choice.ordered_qty}{' '}
+                      received — {choice.remaining} remaining
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setPoPickerData(null)}
+              className="w-full px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

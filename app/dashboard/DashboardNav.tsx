@@ -8,7 +8,7 @@ const navItems = [
   { name: 'Dashboard', href: '/dashboard', icon: '📊' },
   { name: 'Products', href: '/dashboard/products', icon: '👗' },
   { name: 'Purchase Orders', href: '/dashboard/purchase-orders', icon: '📋' },
-  { name: 'Receiving', href: '#', icon: '📦', soon: true },
+  { name: 'Receiving', href: '/dashboard/receiving', icon: '📦', soon: false },
   { name: 'Cycle Counts', href: '#', icon: '🔍', soon: true },
   { name: 'Movement Ledger', href: '#', icon: '📒', soon: true },
 ];
