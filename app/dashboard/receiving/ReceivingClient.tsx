@@ -88,6 +88,197 @@ export default function ReceivingClient() {
     quickPOCreated: string | null;
   } | null>(null);
 
+  // Scan feedback
+  const [flashColor, setFlashColor] = useState<string | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  // Session locking — prevents 2 people receiving the same PO
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
+  const [activeLocks, setActiveLocks] = useState<Set<string>>(new Set());
+  const [lockConflict, setLockConflict] = useState<{
+    po_number: string;
+    locked_by: string;
+    locked_since: string;
+  } | null>(null);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ─── Audio & Haptic Feedback ────────────────────────────
+
+  const getAudioCtx = useCallback(() => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    return audioCtxRef.current;
+  }, []);
+
+  const playBeep = useCallback((type: 'success' | 'warning' | 'error') => {
+    try {
+      const ctx = getAudioCtx();
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.3;
+
+      if (type === 'success') {
+        // High cheerful beep
+        oscillator.frequency.value = 880;
+        oscillator.type = 'sine';
+        oscillator.start();
+        oscillator.stop(ctx.currentTime + 0.15);
+      } else if (type === 'warning') {
+        // Medium double tone
+        oscillator.frequency.value = 440;
+        oscillator.type = 'triangle';
+        oscillator.start();
+        oscillator.stop(ctx.currentTime + 0.3);
+      } else {
+        // Low error buzz
+        oscillator.frequency.value = 220;
+        oscillator.type = 'square';
+        gain.gain.value = 0.15;
+        oscillator.start();
+        oscillator.stop(ctx.currentTime + 0.4);
+      }
+    } catch (e) {
+      // Audio not supported — silent fallback
+    }
+  }, [getAudioCtx]);
+
+  const triggerFeedback = useCallback((type: 'success' | 'warning' | 'error') => {
+    // Sound
+    playBeep(type);
+
+    // Screen flash
+    const colors = {
+      success: 'rgba(34, 197, 94, 0.35)',   // green
+      warning: 'rgba(245, 158, 11, 0.35)',   // amber
+      error: 'rgba(239, 68, 68, 0.35)',      // red
+    };
+    setFlashColor(colors[type]);
+    setTimeout(() => setFlashColor(null), 500);
+
+    // Haptic vibration (mobile)
+    if (navigator.vibrate) {
+      if (type === 'success') navigator.vibrate(100);
+      else if (type === 'warning') navigator.vibrate([100, 50, 100]);
+      else navigator.vibrate([200, 100, 200]);
+    }
+  }, [playBeep]);
+
+  // ─── Session Locking ───────────────────────────────────
+
+  // Get current user on mount
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user) {
+        setCurrentUserId(data.user.id);
+        setCurrentUserEmail(data.user.email || '');
+      }
+    });
+  }, [supabase]);
+
+  // Heartbeat: keep locks alive every 60s while scanning/reviewing
+  useEffect(() => {
+    if ((phase === 'scanning' || phase === 'reviewing') && currentUserId) {
+      heartbeatRef.current = setInterval(async () => {
+        await supabase
+          .from('po_receiving_locks')
+          .update({ last_heartbeat: new Date().toISOString() })
+          .eq('user_id', currentUserId);
+      }, 60_000);
+    }
+    return () => {
+      if (heartbeatRef.current) {
+        clearInterval(heartbeatRef.current);
+        heartbeatRef.current = null;
+      }
+    };
+  }, [phase, currentUserId, supabase]);
+
+  // Release all locks when leaving the page
+  useEffect(() => {
+    const cleanup = () => {
+      if (currentUserId) {
+        navigator.sendBeacon?.('/api/release-locks', JSON.stringify({ user_id: currentUserId }));
+      }
+    };
+    window.addEventListener('beforeunload', cleanup);
+    return () => window.removeEventListener('beforeunload', cleanup);
+  }, [currentUserId]);
+
+  // Check if a PO is locked by another user, returns lock info or null
+  const checkPOLock = useCallback(async (poId: string): Promise<{ locked_by_email: string; locked_at: string } | null> => {
+    if (!currentUserId) return null;
+
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+    const { data: locks } = await supabase
+      .from('po_receiving_locks')
+      .select('user_id, user_email, locked_at, last_heartbeat')
+      .eq('po_id', poId)
+      .neq('user_id', currentUserId)
+      .gte('last_heartbeat', thirtyMinAgo);
+
+    if (locks && locks.length > 0) {
+      return {
+        locked_by_email: locks[0].user_email,
+        locked_at: locks[0].locked_at,
+      };
+    }
+    return null;
+  }, [currentUserId, supabase]);
+
+  // Acquire a lock on a PO for the current user
+  const acquirePOLock = useCallback(async (poId: string, poNumber: string) => {
+    if (!currentUserId || activeLocks.has(poId)) return;
+
+    // First check if another user has it
+    const existingLock = await checkPOLock(poId);
+    if (existingLock) {
+      setLockConflict({
+        po_number: poNumber,
+        locked_by: existingLock.locked_by_email,
+        locked_since: existingLock.locked_at,
+      });
+      return false;
+    }
+
+    // Clean up any expired locks for this PO, then insert ours
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    await supabase
+      .from('po_receiving_locks')
+      .delete()
+      .eq('po_id', poId)
+      .lt('last_heartbeat', thirtyMinAgo);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const tenantId = user?.user_metadata?.tenant_id;
+
+    await supabase.from('po_receiving_locks').upsert({
+      po_id: poId,
+      user_id: currentUserId,
+      user_email: currentUserEmail,
+      tenant_id: tenantId,
+      locked_at: new Date().toISOString(),
+      last_heartbeat: new Date().toISOString(),
+    }, { onConflict: 'po_id,user_id' });
+
+    setActiveLocks((prev) => new Set(prev).add(poId));
+    return true;
+  }, [currentUserId, currentUserEmail, activeLocks, checkPOLock, supabase]);
+
+  // Release all locks for the current user
+  const releaseAllLocks = useCallback(async () => {
+    if (!currentUserId) return;
+    await supabase
+      .from('po_receiving_locks')
+      .delete()
+      .eq('user_id', currentUserId);
+    setActiveLocks(new Set());
+  }, [currentUserId, supabase]);
+
   // ─── Effects ────────────────────────────────────────────
 
   useEffect(() => {
@@ -155,10 +346,12 @@ export default function ReceivingClient() {
 
   // ─── Session Handlers ──────────────────────────────────
 
-  const handleStartSession = () => {
+  const handleStartSession = async () => {
     setSessionItems({});
     setScanCount(0);
     setProcessResults(null);
+    setLockConflict(null);
+    await releaseAllLocks(); // clean up any stale locks from previous session
     setPhase('scanning');
   };
 
@@ -198,7 +391,22 @@ export default function ReceivingClient() {
 
     setScanCount((c) => c + 1);
 
-    // 1. Look up variant by barcode or SKU
+    // 1. Build barcode variants to handle UPC-12 vs EAN-13 format differences
+    //    Phone cameras often read 13 digits (EAN-13), USB scanners read 12 (UPC-A)
+    const barcodesToTry = [barcode];
+    if (barcode.startsWith('0') && barcode.length === 13) {
+      // EAN-13 with leading zero → try as UPC-12
+      barcodesToTry.push(barcode.substring(1));
+    } else if (/^\d{12}$/.test(barcode)) {
+      // UPC-12 → try as EAN-13 with leading zero
+      barcodesToTry.push('0' + barcode);
+    }
+
+    // Build OR filter for all barcode variants
+    const orFilters = barcodesToTry
+      .flatMap(b => [`barcode.eq.${b}`, `sku.eq.${b}`])
+      .join(',');
+
     const { data: variants } = await supabase
       .from('product_variants')
       .select(
@@ -208,10 +416,11 @@ export default function ReceivingClient() {
         products!inner ( id, title, vendor )
       `
       )
-      .or(`barcode.eq.${barcode},sku.eq.${barcode}`)
+      .or(orFilters)
       .limit(1);
 
     if (!variants || variants.length === 0) {
+      triggerFeedback('error');
       setToast({ message: `Barcode "${barcode}" not found`, type: 'error' });
       return;
     }
@@ -262,6 +471,16 @@ export default function ReceivingClient() {
     // 3. Route based on matches
     if (matchingItems.length === 1) {
       const match = matchingItems[0];
+
+      // Session locking: check if another user has this PO locked
+      if (match.po_id) {
+        const lockOk = await acquirePOLock(match.po_id, match.po_number);
+        if (lockOk === false) {
+          triggerFeedback('error');
+          return; // lock conflict modal will show
+        }
+      }
+
       addToSession({
         barcode,
         product_name: productName,
@@ -278,11 +497,13 @@ export default function ReceivingClient() {
         already_received: match.already_received,
         added_during_receiving: false,
       });
+      triggerFeedback('success');
       setToast({
         message: `+1 ${productName} — ${variantName} → ${match.po_number}`,
         type: 'success',
       });
     } else if (matchingItems.length > 1) {
+      triggerFeedback('warning');
       setPoPickerData({
         variant: {
           product_name: productName,
@@ -304,6 +525,7 @@ export default function ReceivingClient() {
           ...prev,
           [noPOKey]: { ...prev[noPOKey], quantity: prev[noPOKey].quantity + 1 },
         }));
+        triggerFeedback('warning');
         setToast({
           message: `+1 ${productName} — ${variantName} (no matching PO)`,
           type: 'info',
@@ -330,13 +552,14 @@ export default function ReceivingClient() {
             added_during_receiving: true,
           },
         }));
+        triggerFeedback('warning');
         setToast({
           message: `${productName} — ${variantName} not on any open PO`,
           type: 'info',
         });
       }
     }
-  }, [sessionItems, supabase]);
+  }, [sessionItems, supabase, triggerFeedback]);
 
   // ─── Camera Handlers ───────────────────────────────────
 
@@ -399,9 +622,17 @@ export default function ReceivingClient() {
 
   // ─── PO Picker Handler ─────────────────────────────────
 
-  const handlePickPO = (choice: POChoice) => {
+  const handlePickPO = async (choice: POChoice) => {
     if (!poPickerData) return;
     const vv = poPickerData.variant;
+
+    // Session locking: check if another user has this PO locked
+    const lockOk = await acquirePOLock(choice.po_id, choice.po_number);
+    if (lockOk === false) {
+      triggerFeedback('error');
+      setPoPickerData(null);
+      return; // lock conflict modal will show
+    }
 
     addToSession({
       barcode: vv.barcode,
@@ -588,6 +819,9 @@ export default function ReceivingClient() {
         }
       }
 
+      // Release all PO locks after successful processing
+      await releaseAllLocks();
+
       setProcessResults({
         posUpdated: posUpdated.size,
         itemsReceived,
@@ -607,6 +841,45 @@ export default function ReceivingClient() {
 
   return (
     <div className="max-w-4xl">
+      {/* Screen Flash Overlay */}
+      {flashColor && (
+        <div
+          className="fixed inset-0 z-[100] pointer-events-none transition-opacity duration-300"
+          style={{ backgroundColor: flashColor }}
+        />
+      )}
+      {/* Lock Conflict Modal */}
+      {lockConflict && (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+            <div className="text-center">
+              <div className="text-4xl mb-3">🔒</div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">
+                PO Locked by Another User
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                <strong>{lockConflict.po_number}</strong> is currently being
+                received by <strong>{lockConflict.locked_by}</strong>
+                <br />
+                <span className="text-xs text-gray-400">
+                  Started {new Date(lockConflict.locked_since).toLocaleTimeString()}
+                </span>
+              </p>
+              <p className="text-xs text-gray-500 mb-4">
+                To prevent duplicate receiving, only one person can work on a PO
+                at a time. The lock expires after 30 minutes of inactivity.
+              </p>
+              <button
+                onClick={() => setLockConflict(null)}
+                className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium hover:bg-blue-700"
+              >
+                Got it — I'll scan a different item
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       {toast && (
         <div
@@ -684,7 +957,19 @@ export default function ReceivingClient() {
           {/* Scan Input */}
           <div className="bg-white rounded-xl border p-4 mb-4">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">📷</span>
+              <svg className="w-7 h-7 text-gray-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="1" y="4" width="3" height="16" />
+                <rect x="6" y="4" width="1.5" height="16" />
+                <rect x="9" y="4" width="3" height="16" />
+                <rect x="14" y="4" width="1.5" height="16" />
+                <rect x="17" y="4" width="1.5" height="16" />
+                <rect x="20" y="4" width="3" height="16" />
+                <line x1="5" y1="21" x2="5" y2="22" />
+                <line x1="8" y1="21" x2="8" y2="22" />
+                <line x1="13" y1="21" x2="13" y2="22" />
+                <line x1="16" y1="21" x2="16" y2="22" />
+                <line x1="19" y1="21" x2="19" y2="22" />
+              </svg>
               <input
                 ref={scanRef}
                 type="text"

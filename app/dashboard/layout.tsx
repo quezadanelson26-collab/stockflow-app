@@ -17,7 +17,8 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-gray-50 flex">
       <DashboardNav userEmail={user.email || ''} />
-      <main className="flex-1 ml-64 p-8">
+      {/* Desktop: sidebar offset (ml-64). Mobile: top header (mt-14) + bottom nav (mb-16) */}
+      <main className="flex-1 md:ml-64 mt-14 md:mt-0 mb-16 md:mb-0 p-4 md:p-8">
         {children}
       </main>
     </div>
