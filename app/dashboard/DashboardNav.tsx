@@ -8,11 +8,14 @@ import { useState } from 'react';
 const navItems = [
   { name: 'Dashboard', href: '/dashboard', icon: '📊' },
   { name: 'Products', href: '/dashboard/products', icon: '👗' },
+  { name: 'Inventory', href: '/dashboard/inventory', icon: '📈' },
   { name: 'Purchase Orders', href: '/dashboard/purchase-orders', icon: '📋' },
   { name: 'Receiving', href: '/dashboard/receiving', icon: '📦', soon: false },
+  { name: 'Movement Ledger', href: '/dashboard/movement-ledger', icon: '📒' },
+  { name: 'Discrepancies', href: '/dashboard/discrepancies', icon: '🚩' },
   { name: 'Cycle Counts', href: '#', icon: '🔍', soon: true },
-  { name: 'Movement Ledger', href: '#', icon: '📒', soon: true },
 ];
+
 
 // Bottom nav on mobile: only active pages (no "soon" items), abbreviated labels
 const mobileNavItems = navItems.filter((i) => !i.soon);
