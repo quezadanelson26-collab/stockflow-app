@@ -2,12 +2,18 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetSent, setResetSent] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault(); setLoading(true); setError("");
     const supabase = createClient();
@@ -15,6 +21,20 @@ export default function LoginPage() {
     if (error) { setError(error.message); setLoading(false); }
     else { router.push("/dashboard"); router.refresh(); }
   };
+
+  // --- PART 2: Reset password handler ---
+  const handleResetPassword = async () => {
+    const supabase = createClient();
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+      redirectTo: 'https://stockflow-app-seven.vercel.app/reset-password',
+    });
+    if (error) {
+      alert(error.message);
+    } else {
+      setResetSent(true);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 px-4">
       <div className="w-full max-w-md">
@@ -42,6 +62,27 @@ export default function LoginPage() {
             <button type="submit" disabled={loading} className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all duration-200 shadow-lg shadow-indigo-600/25">
               {loading ? "Signing in..." : "Sign in"}
             </button>
+
+            {/* --- PART 3: Forgot Password UI --- */}
+            {!showReset ? (
+              <button type="button" onClick={() => setShowReset(true)} className="text-sm text-indigo-400 hover:text-indigo-300 hover:underline mt-1 w-full text-center transition-colors">
+                Forgot Password?
+              </button>
+            ) : (
+              <div className="mt-2 space-y-3">
+                <input
+                  type="email"
+                  placeholder="Enter your email"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                />
+                <button type="button" onClick={handleResetPassword} className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl transition-all duration-200">
+                  Send Reset Link
+                </button>
+                {resetSent && <p className="text-green-400 text-sm text-center">✅ Check your email for the reset link!</p>}
+              </div>
+            )}
           </form>
         </div>
         <p className="text-center text-slate-500 text-sm mt-6">StockFlow v2 — Built for BOCNYC</p>
