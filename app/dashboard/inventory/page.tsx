@@ -43,7 +43,8 @@ export default async function InventoryPage() {
 
   return (
     <InventoryClient
-      inventory={inventory || []}
+      inventory={(inventory as any) || []}
+
       tenantId={profile.tenant_id}
       userId={user.id}
     />

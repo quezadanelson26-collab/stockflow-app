@@ -55,7 +55,8 @@ export default async function DiscrepancyFlagsPage() {
 
   return (
     <DiscrepancyClient
-      flags={flags || []}
+     flags={(flags as any) || []}
+
       profiles={profiles || []}
       userId={user.id}
       tenantId={profile.tenant_id}

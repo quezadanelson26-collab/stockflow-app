@@ -52,7 +52,8 @@ export default async function MovementLedgerPage() {
 
   return (
     <MovementLedgerClient
-      movements={movements || []}
+     movements={(movements as any) || []}
+
       profiles={profiles || []}
     />
   );
