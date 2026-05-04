@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { useDebounce } from '@/lib/hooks/useDebounce';
+import { formatDate, formatNumber } from '@/lib/format';
+import { SEARCH_DEBOUNCE_MS, DEFAULT_PAGE_SIZE } from '@/lib/constants';
 
 type Movement = {
   id: string;

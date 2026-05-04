@@ -153,7 +153,7 @@ export default function PurchaseOrdersClient() {
 
       {/* Table */}
       {loading ? (
-        <Loading label="Loading purchase orders..." />
+        <Loading message="Loading purchase orders..." />
       ) : filteredOrders.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-xl border">
           <p className="text-gray-400 text-lg">
