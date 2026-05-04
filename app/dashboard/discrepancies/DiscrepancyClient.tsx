@@ -1,8 +1,12 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import { useDebounce } from '@/lib/hooks/useDebounce';
+import { formatDate, formatNumber } from '@/lib/format';
+import { SEARCH_DEBOUNCE_MS, TOAST_DURATION } from '@/lib/constants';
+import { sanitizeText } from '@/lib/validation';
 
 type Flag = {
   id: string;
@@ -52,6 +56,7 @@ export default function DiscrepancyClient({
   tenantId: string;
 }) {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [resolving, setResolving] = useState<Flag | null>(null);
   const [resolutionNotes, setResolutionNotes] = useState('');
@@ -59,6 +64,12 @@ export default function DiscrepancyClient({
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_DURATION);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const profileMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -81,8 +92,8 @@ export default function DiscrepancyClient({
     if (statusFilter !== 'all') {
       items = items.filter((f) => f.status === statusFilter);
     }
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       items = items.filter(
         (f) =>
           f.product_variants.products.title.toLowerCase().includes(q) ||
@@ -93,7 +104,7 @@ export default function DiscrepancyClient({
       );
     }
     return items;
-  }, [flags, statusFilter, search]);
+  }, [flags, statusFilter, debouncedSearch]);
 
   const handleResolve = async () => {
     if (!resolving) return;
@@ -105,7 +116,7 @@ export default function DiscrepancyClient({
         status: resolutionAction,
         resolved_by: userId,
         resolved_at: new Date().toISOString(),
-        resolution_notes: resolutionNotes || null,
+        resolution_notes: sanitizeText(resolutionNotes) || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', resolving.id);
@@ -151,11 +162,6 @@ export default function DiscrepancyClient({
     );
   };
 
-  const formatDate = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto">
       <div className="mb-6">
@@ -166,19 +172,19 @@ export default function DiscrepancyClient({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Flags</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">{formatNumber(stats.total)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">Open</p>
-          <p className="text-2xl font-bold text-red-600 mt-1">{stats.open}</p>
+          <p className="text-2xl font-bold text-red-600 mt-1">{formatNumber(stats.open)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-yellow-600 uppercase tracking-wide">Investigating</p>
-          <p className="text-2xl font-bold text-yellow-600 mt-1">{stats.investigating}</p>
+          <p className="text-2xl font-bold text-yellow-600 mt-1">{formatNumber(stats.investigating)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-red-700 uppercase tracking-wide">🚨 Critical</p>
-          <p className="text-2xl font-bold text-red-700 mt-1">{stats.critical}</p>
+          <p className="text-2xl font-bold text-red-700 mt-1">{formatNumber(stats.critical)}</p>
         </div>
       </div>
 
@@ -259,7 +265,7 @@ export default function DiscrepancyClient({
           </table>
         </div>
         <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
-          Showing {filtered.length} of {flags.length} flags
+          Showing {formatNumber(filtered.length)} of {formatNumber(flags.length)} flags
         </div>
       </div>
 

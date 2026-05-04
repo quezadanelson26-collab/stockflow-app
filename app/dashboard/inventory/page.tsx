@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
+import { isValidUUID } from '@/lib/validation';
 import InventoryClient from './InventoryClient';
 
 export default async function InventoryPage() {
@@ -16,7 +17,7 @@ export default async function InventoryPage() {
     .eq('id', user.id)
     .single();
 
-  if (!profile) redirect('/login');
+  if (!profile || !isValidUUID(profile.tenant_id)) redirect('/login');
 
   const { data: inventory } = await supabase
     .from('inventory_levels')
@@ -44,7 +45,6 @@ export default async function InventoryPage() {
   return (
     <InventoryClient
       inventory={(inventory as any) || []}
-
       tenantId={profile.tenant_id}
       userId={user.id}
     />

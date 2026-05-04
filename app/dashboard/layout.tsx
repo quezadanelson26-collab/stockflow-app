@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import DashboardNav from './DashboardNav';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 export default async function DashboardLayout({
   children,
@@ -17,9 +18,10 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-gray-50 flex">
       <DashboardNav userEmail={user.email || ''} />
-      {/* Desktop: sidebar offset (ml-64). Mobile: top header (mt-14) + bottom nav (mb-16) */}
       <main className="flex-1 md:ml-64 mt-14 md:mt-0 mb-16 md:mb-0 p-4 md:p-8">
-        {children}
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Html5Qrcode } from 'html5-qrcode';
+import { formatNumber, formatCurrency } from '@/lib/format';
+import { TOAST_DURATION } from '@/lib/constants';
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -283,7 +285,7 @@ export default function ReceivingClient() {
 
   useEffect(() => {
     if (toast) {
-      const t = setTimeout(() => setToast(null), 4000);
+      const t = setTimeout(() => setToast(null), TOAST_DURATION);
       return () => clearTimeout(t);
     }
   }, [toast]);

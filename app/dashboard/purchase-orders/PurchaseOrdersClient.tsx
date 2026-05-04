@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import type { PurchaseOrder } from '@/lib/types/database';
+import { useDebounce } from '@/lib/hooks/useDebounce';
+import { formatCurrency, formatDate, formatNumber } from '@/lib/format';
+import { SEARCH_DEBOUNCE_MS } from '@/lib/constants';
+import { Loading } from '@/components/Loading';
 
 const statusColors: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-700',
@@ -26,6 +30,7 @@ export default function PurchaseOrdersClient() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('active');
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearch = useDebounce(searchQuery, SEARCH_DEBOUNCE_MS);
   const supabase = createClient();
 
   useEffect(() => {
@@ -53,10 +58,10 @@ export default function PurchaseOrdersClient() {
     setLoading(false);
   }
 
-  // Filter by vendor search
+  // Filter by vendor search (now debounced)
   const filteredOrders = orders.filter((po) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
+    if (!debouncedSearch.trim()) return true;
+    const q = debouncedSearch.toLowerCase();
     return (
       po.vendor.toLowerCase().includes(q) ||
       po.po_number.toLowerCase().includes(q)
@@ -148,7 +153,7 @@ export default function PurchaseOrdersClient() {
 
       {/* Table */}
       {loading ? (
-        <div className="text-center py-12 text-gray-400">Loading...</div>
+        <Loading label="Loading purchase orders..." />
       ) : filteredOrders.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-xl border">
           <p className="text-gray-400 text-lg">
@@ -215,20 +220,18 @@ export default function PurchaseOrdersClient() {
                       {po.status}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-gray-600">{po.total_items}</td>
+                  <td className="px-6 py-4 text-gray-600">{formatNumber(po.total_items)}</td>
                   <td className="px-6 py-4 font-medium">
-                    ${Number(po.total_cost).toFixed(2)}
+                    {formatCurrency(Number(po.total_cost))}
                   </td>
                   <td className="px-6 py-4 text-gray-500">
-                    {po.expected_date
-                      ? new Date(po.expected_date).toLocaleDateString()
-                      : '—'}
+                    {formatDate(po.expected_date)}
                   </td>
                   <td className="px-6 py-4 text-gray-500">
                     {(po as any).location || '—'}
                   </td>
                   <td className="px-6 py-4 text-gray-500">
-                    {new Date(po.created_at).toLocaleDateString()}
+                    {formatDate(po.created_at)}
                   </td>
                 </tr>
               ))}

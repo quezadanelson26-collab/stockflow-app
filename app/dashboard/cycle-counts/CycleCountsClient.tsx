@@ -3,6 +3,10 @@
 import { useState, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import { useDebounce } from '@/lib/hooks/useDebounce';
+import { formatDate, formatNumber } from '@/lib/format';
+import { SEARCH_DEBOUNCE_MS, TOAST_DURATION } from '@/lib/constants';
+import { sanitizeText } from '@/lib/validation';
 
 type CycleCountItem = {
   id: string;
@@ -82,6 +86,7 @@ export default function CycleCountsClient({
   tenantId: string;
 }) {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [view, setView] = useState<View>('list');
   const [selectedCount, setSelectedCount] = useState<CycleCount | null>(null);
@@ -93,6 +98,12 @@ export default function CycleCountsClient({
   const [countedValues, setCountedValues] = useState<Record<string, string>>({});
   const [itemNotes, setItemNotes] = useState<Record<string, string>>({});
   const router = useRouter();
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_DURATION);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const profileMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -115,8 +126,8 @@ export default function CycleCountsClient({
     if (statusFilter !== 'all') {
       items = items.filter((c) => c.status === statusFilter);
     }
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       items = items.filter(
         (c) =>
           c.title?.toLowerCase().includes(q) ||
@@ -125,7 +136,7 @@ export default function CycleCountsClient({
       );
     }
     return items;
-  }, [cycleCounts, statusFilter, search]);
+  }, [cycleCounts, statusFilter, debouncedSearch]);
 
   const handleCreateCount = async () => {
     if (!newTitle.trim()) {
@@ -148,7 +159,7 @@ export default function CycleCountsClient({
       .insert({
         tenant_id: tenantId,
         store_id: storeId,
-        title: newTitle.trim(),
+        title: sanitizeText(newTitle.trim()),
         notes: newNotes.trim() || null,
         status: 'in_progress',
         created_by: userId,
@@ -340,11 +351,6 @@ export default function CycleCountsClient({
         {labels[status] || status}
       </span>
     );
-  };
-
-  const formatDate = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const formatTime = (iso: string) => {

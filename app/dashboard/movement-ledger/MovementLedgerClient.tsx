@@ -42,6 +42,7 @@ export default function MovementLedgerClient({
   profiles: Profile[];
 }) {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
 
   const profileMap = useMemo(() => {
@@ -65,8 +66,8 @@ export default function MovementLedgerClient({
     if (typeFilter !== 'all') {
       items = items.filter((m) => m.movement_type === typeFilter);
     }
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       items = items.filter(
         (m) =>
           m.product_variants.products.title.toLowerCase().includes(q) ||
@@ -101,10 +102,6 @@ export default function MovementLedgerClient({
     return <span className="text-gray-400 font-semibold">0</span>;
   };
 
-  const formatDate = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
 
   const formatTime = (iso: string) => {
     const d = new Date(iso);
@@ -121,7 +118,7 @@ export default function MovementLedgerClient({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Movements</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">{formatNumber(stats.total)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-green-600 uppercase tracking-wide">Received</p>
@@ -129,7 +126,7 @@ export default function MovementLedgerClient({
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Adjustments</p>
-          <p className="text-2xl font-bold text-blue-600 mt-1">{stats.adjustments}</p>
+          <p className="text-2xl font-bold text-blue-600 mt-1">{formatNumber(stats.adjustments)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Net Change</p>
@@ -212,7 +209,7 @@ export default function MovementLedgerClient({
           </table>
         </div>
         <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
-          Showing {filtered.length} of {movements.length} movements
+          Showing {formatNumber(filtered.length)} of {formatNumber(movements.length)} movements
         </div>
       </div>
     </div>

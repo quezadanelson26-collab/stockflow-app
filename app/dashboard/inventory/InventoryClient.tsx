@@ -1,34 +1,14 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
-
-type InventoryItem = {
-  id: string;
-  quantity_on_hand: number;
-  quantity_committed: number;
-  quantity_available: number;
-  last_counted_at: string | null;
-  updated_at: string;
-  store_id: string;
-  product_variant_id: string;
-  product_variants: {
-    id: string;
-    title: string;
-    sku: string;
-    barcode: string | null;
-    products: {
-      id: string;
-      title: string;
-      vendor: string;
-      status: string;
-    };
-  };
-};
-
-type StockFilter = 'all' | 'in_stock' | 'low_stock' | 'out_of_stock';
-const LOW_STOCK_THRESHOLD = 5;
+import type { InventoryItem, StockFilter } from '@/lib/types';
+import { useDebounce } from '@/lib/hooks/useDebounce';
+import { isValidQuantity, sanitizeText } from '@/lib/validation';
+import { formatNumber } from '@/lib/format';
+import { LOW_STOCK_THRESHOLD, SEARCH_DEBOUNCE_MS, TOAST_DURATION } from '@/lib/constants';
+import { Loading } from '@/components/Loading';
 
 export default function InventoryClient({
   inventory,
@@ -40,6 +20,7 @@ export default function InventoryClient({
   userId: string;
 }) {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
   const [filter, setFilter] = useState<StockFilter>('all');
   const [adjusting, setAdjusting] = useState<InventoryItem | null>(null);
   const [adjustQty, setAdjustQty] = useState('');
@@ -48,6 +29,13 @@ export default function InventoryClient({
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const router = useRouter();
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_DURATION);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const stats = useMemo(() => {
     const totalSKUs = inventory.length;
@@ -65,8 +53,8 @@ export default function InventoryClient({
     if (filter === 'low_stock')
       items = items.filter((i) => i.quantity_on_hand > 0 && i.quantity_on_hand <= LOW_STOCK_THRESHOLD);
     if (filter === 'out_of_stock') items = items.filter((i) => i.quantity_on_hand <= 0);
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       items = items.filter(
         (i) =>
           i.product_variants.products.title.toLowerCase().includes(q) ||
@@ -77,19 +65,21 @@ export default function InventoryClient({
       );
     }
     return items;
-  }, [inventory, filter, search]);
+  }, [inventory, filter, debouncedSearch]);
 
   const handleAdjust = async () => {
     if (!adjusting || !adjustQty) return;
-    setSaving(true);
-    const supabase = createClient();
     const newQty = parseInt(adjustQty, 10);
-    if (isNaN(newQty) || newQty < 0) {
-      setToast('❌ Enter a valid quantity');
-      setSaving(false);
+
+    if (!isValidQuantity(newQty)) {
+      setToast('❌ Enter a valid quantity (0 or greater)');
       return;
     }
+
+    setSaving(true);
+    const supabase = createClient();
     const diff = newQty - adjusting.quantity_on_hand;
+    const sanitizedNotes = sanitizeText(adjustNotes);
 
     const { error: updateErr } = await supabase
       .from('inventory_levels')
@@ -113,12 +103,12 @@ export default function InventoryClient({
       movement_type: 'adjustment',
       quantity: diff,
       reference_type: adjustReason,
-      reason: adjustNotes || adjustReason.replace(/_/g, ' '),
+      reason: sanitizedNotes || adjustReason.replace(/_/g, ' '),
       performed_by: userId,
       balance_after: newQty,
     });
 
-    setToast(`✅ ${adjusting.product_variants.products.title} — ${adjusting.product_variants.title} updated to ${newQty}`);
+    setToast(`✅ ${adjusting.product_variants.products.title} — ${adjusting.product_variants.title} updated to ${formatNumber(newQty)}`);
     setAdjusting(null);
     setAdjustQty('');
     setAdjustNotes('');
@@ -144,19 +134,19 @@ export default function InventoryClient({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total SKUs</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{stats.totalSKUs}</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">{formatNumber(stats.totalSKUs)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Units</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{stats.totalUnits.toLocaleString()}</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">{formatNumber(stats.totalUnits)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-yellow-600 uppercase tracking-wide">Low Stock</p>
-          <p className="text-2xl font-bold text-yellow-600 mt-1">{stats.lowStock}</p>
+          <p className="text-2xl font-bold text-yellow-600 mt-1">{formatNumber(stats.lowStock)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">Out of Stock</p>
-          <p className="text-2xl font-bold text-red-600 mt-1">{stats.outOfStock}</p>
+          <p className="text-2xl font-bold text-red-600 mt-1">{formatNumber(stats.outOfStock)}</p>
         </div>
       </div>
 
@@ -214,9 +204,9 @@ export default function InventoryClient({
                     </td>
                     <td className="px-4 py-3 text-gray-700">{item.product_variants.title}</td>
                     <td className="px-4 py-3 text-gray-500 font-mono text-xs hidden md:table-cell">{item.product_variants.sku || '—'}</td>
-                    <td className="px-4 py-3 text-center font-semibold text-gray-900">{item.quantity_on_hand}</td>
-                    <td className="px-4 py-3 text-center text-gray-500 hidden sm:table-cell">{item.quantity_committed}</td>
-                    <td className="px-4 py-3 text-center text-gray-700 hidden sm:table-cell">{item.quantity_available}</td>
+                    <td className="px-4 py-3 text-center font-semibold text-gray-900">{formatNumber(item.quantity_on_hand)}</td>
+                    <td className="px-4 py-3 text-center text-gray-500 hidden sm:table-cell">{formatNumber(item.quantity_committed)}</td>
+                    <td className="px-4 py-3 text-center text-gray-700 hidden sm:table-cell">{formatNumber(item.quantity_available)}</td>
                     <td className="px-4 py-3 text-center">{getStockBadge(item.quantity_on_hand)}</td>
                     <td className="px-4 py-3 text-center">
                       <button
@@ -233,7 +223,7 @@ export default function InventoryClient({
           </table>
         </div>
         <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
-          Showing {filtered.length} of {inventory.length} items
+          Showing {formatNumber(filtered.length)} of {formatNumber(inventory.length)} items
         </div>
       </div>
 
@@ -249,7 +239,7 @@ export default function InventoryClient({
               <div className="space-y-4">
                 <div className="bg-gray-50 rounded-lg p-3 flex justify-between text-sm">
                   <span className="text-gray-500">Current On Hand</span>
-                  <span className="font-bold text-gray-900">{adjusting.quantity_on_hand}</span>
+                  <span className="font-bold text-gray-900">{formatNumber(adjusting.quantity_on_hand)}</span>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">New Quantity</label>

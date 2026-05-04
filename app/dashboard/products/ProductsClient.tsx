@@ -1,7 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
+import { useDebounce } from '@/lib/hooks/useDebounce';
+import { formatNumber } from '@/lib/format';
+import { SEARCH_DEBOUNCE_MS } from '@/lib/constants';
 
 interface Store { id: string; name: string; }
 interface InventoryLevel { quantity_on_hand: number; store_id: string; }
@@ -24,6 +27,7 @@ export default function ProductsClient({
   initialProducts, initialStores,
 }: { initialProducts: Product[]; initialStores: Store[] }) {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
   const [vendorFilter, setVendorFilter] = useState('');
   const [shopifyStatusFilter, setShopifyStatusFilter] = useState('');
   const [stockFilter, setStockFilter] = useState('');
@@ -46,22 +50,24 @@ export default function ProductsClient({
     }, 0) || 0;
   };
 
-  const filtered = initialProducts.filter((p) => {
-    const q = search.toLowerCase();
-    const matchesSearch = !search ||
-      p.title.toLowerCase().includes(q) ||
-      p.vendor?.toLowerCase().includes(q) ||
-      p.product_type?.toLowerCase().includes(q) ||
-      p.product_variants?.some((v) => v.sku?.toLowerCase().includes(q));
-    const matchesVendor = !vendorFilter || p.vendor === vendorFilter;
-    const matchesShopifyStatus = !shopifyStatusFilter || p.shopify_status === shopifyStatusFilter;
-    const total = getTotalStock(p);
-    const matchesStock = !stockFilter ||
-      (stockFilter === 'in_stock' && total > 0) ||
-      (stockFilter === 'out_of_stock' && total === 0);
-    const matchesStore = !storeFilter || getStoreStock(p, storeFilter) > 0;
-    return matchesSearch && matchesVendor && matchesShopifyStatus && matchesStock && matchesStore;
-  });
+  const filtered = useMemo(() => {
+    return initialProducts.filter((p) => {
+      const q = debouncedSearch.toLowerCase();
+      const matchesSearch = !debouncedSearch ||
+        p.title.toLowerCase().includes(q) ||
+        p.vendor?.toLowerCase().includes(q) ||
+        p.product_type?.toLowerCase().includes(q) ||
+        p.product_variants?.some((v) => v.sku?.toLowerCase().includes(q));
+      const matchesVendor = !vendorFilter || p.vendor === vendorFilter;
+      const matchesShopifyStatus = !shopifyStatusFilter || p.shopify_status === shopifyStatusFilter;
+      const total = getTotalStock(p);
+      const matchesStock = !stockFilter ||
+        (stockFilter === 'in_stock' && total > 0) ||
+        (stockFilter === 'out_of_stock' && total === 0);
+      const matchesStore = !storeFilter || getStoreStock(p, storeFilter) > 0;
+      return matchesSearch && matchesVendor && matchesShopifyStatus && matchesStock && matchesStore;
+    });
+  }, [initialProducts, debouncedSearch, vendorFilter, shopifyStatusFilter, stockFilter, storeFilter]);
 
   const visibleStores = storeFilter
     ? initialStores.filter((s) => s.id === storeFilter)
@@ -71,7 +77,7 @@ export default function ProductsClient({
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Products</h1>
-        <span className="text-sm text-gray-500">{filtered.length} of {initialProducts.length} products</span>
+        <span className="text-sm text-gray-500">{formatNumber(filtered.length)} of {formatNumber(initialProducts.length)} products</span>
       </div>
       <div className="flex flex-wrap gap-3 mb-6">
         <input type="text" placeholder="Search by name, designer, or SKU..." value={search}
@@ -137,9 +143,9 @@ export default function ProductsClient({
                     </span>
                   </td>
                   {visibleStores.map((store) => (
-                    <td key={store.id} className={`px-4 py-3 text-center font-mono ${storeFilter === store.id ? 'text-blue-700 font-bold bg-blue-50' : 'text-gray-700'}`}>{getStoreStock(product, store.id)}</td>
+                    <td key={store.id} className={`px-4 py-3 text-center font-mono ${storeFilter === store.id ? 'text-blue-700 font-bold bg-blue-50' : 'text-gray-700'}`}>{formatNumber(getStoreStock(product, store.id))}</td>
                   ))}
-                  <td className="px-4 py-3 text-center font-bold font-mono text-gray-900">{total}</td>
+                  <td className="px-4 py-3 text-center font-bold font-mono text-gray-900">{formatNumber(total)}</td>
                 </tr>
               );
             })}
