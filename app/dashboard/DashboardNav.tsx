@@ -13,7 +13,8 @@ const navItems = [
   { name: 'Receiving', href: '/dashboard/receiving', icon: '📦', soon: false },
   { name: 'Movement Ledger', href: '/dashboard/movement-ledger', icon: '📒' },
   { name: 'Discrepancies', href: '/dashboard/discrepancies', icon: '🚩' },
-  { name: 'Cycle Counts', href: '#', icon: '🔍', soon: true },
+  { name: 'Cycle Counts', href: '/dashboard/cycle-counts', icon: '🔍' },
+
 ];
 
 
