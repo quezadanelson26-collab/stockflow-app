@@ -462,11 +462,25 @@ export default function PODetailClient({ id }: { id: string }) {
     setReceivingLoading(true);
     const now = new Date().toISOString();
 
-    // Get current user
+        // Get current user
     const {
       data: { user },
     } = await supabase.auth.getUser();
     const receivedBy = user?.email || 'Unknown';
+    const tenantId = user?.user_metadata?.tenant_id;
+
+    // Look up store_id from PO location
+    let storeId: string | null = null;
+    if (po?.location) {
+      const { data: loc } = await supabase
+        .from('locations')
+        .select('id')
+        .eq('name', po.location)
+        .eq('tenant_id', tenantId)
+        .single();
+      storeId = loc?.id || null;
+    }
+
 
     // 1 — Create receiving session
     const { data: session, error: sessErr } = await supabase
@@ -543,7 +557,7 @@ export default function PODetailClient({ id }: { id: string }) {
         updatePayload.quantity = effectiveQty;
       }
 
-      const { error: updateErr } = await supabase
+            const { error: updateErr } = await supabase
         .from('purchase_order_items')
         .update(updatePayload)
         .eq('id', lineItemId);
@@ -555,6 +569,52 @@ export default function PODetailClient({ id }: { id: string }) {
         );
         updateErrors.push(`${item.product_name}: ${updateErr.message}`);
       }
+
+      // ── Update inventory_levels ──
+      if (item.variant_id) {
+        const { data: existingLevel } = await supabase
+          .from('inventory_levels')
+          .select('id, quantity_on_hand, quantity_committed')
+          .eq('product_variant_id', item.variant_id)
+          .eq('tenant_id', tenantId)
+          .maybeSingle();
+
+        const prevQty = existingLevel?.quantity_on_hand || 0;
+        const committed = existingLevel?.quantity_committed || 0;
+        const newQty = prevQty + qty;
+
+        if (existingLevel) {
+          await supabase.from('inventory_levels').update({
+            quantity_on_hand: newQty,
+            quantity_available: newQty - committed,
+            updated_at: now,
+          }).eq('id', existingLevel.id);
+        } else {
+          await supabase.from('inventory_levels').insert({
+            tenant_id: tenantId,
+            store_id: storeId,
+            product_variant_id: item.variant_id,
+            quantity_on_hand: qty,
+            quantity_committed: 0,
+            quantity_available: qty,
+          });
+        }
+
+        // ── Log inventory movement ──
+        await supabase.from('inventory_movements').insert({
+          tenant_id: tenantId,
+          store_id: storeId,
+          product_variant_id: item.variant_id,
+          movement_type: 'receiving',
+          quantity: qty,
+          reference_type: 'purchase_order',
+          reference_id: id,
+          performed_by: user?.id || null,
+          balance_after: existingLevel ? (prevQty + qty) : qty,
+          notes: `Received on PO ${po?.po_number}`,
+        });
+      }
+
     }
 
     if (updateErrors.length > 0) {

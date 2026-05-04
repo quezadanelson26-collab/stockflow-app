@@ -665,6 +665,11 @@ export default function ReceivingClient() {
     const now = new Date().toISOString();
     const receivedBy = 'staff';
 
+    // Get tenant info for inventory writes
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const tenantId = authUser?.user_metadata?.tenant_id;
+
+
     const posUpdated = new Set<string>();
     let itemsReceived = 0;
     let quickPOCreated: string | null = null;
@@ -702,14 +707,75 @@ export default function ReceivingClient() {
             })
             .eq('id', item.line_item_id);
 
-          await supabase.from('receiving_history').insert({
+                    await supabase.from('receiving_history').insert({
             po_item_id: item.line_item_id,
             quantity_received: item.quantity,
             received_at: now,
             received_by: receivedBy,
           });
 
+          // ── Update inventory_levels ──
+          let storeId: string | null = null;
+          const { data: poData } = await supabase
+            .from('purchase_orders')
+            .select('location')
+            .eq('id', item.po_id)
+            .single();
+
+          if (poData?.location) {
+            const { data: loc } = await supabase
+              .from('locations')
+              .select('id')
+              .eq('name', poData.location)
+              .eq('tenant_id', tenantId)
+              .single();
+            storeId = loc?.id || null;
+          }
+
+          const { data: existingLevel } = await supabase
+            .from('inventory_levels')
+            .select('id, quantity_on_hand, quantity_committed')
+            .eq('product_variant_id', item.variant_id)
+            .eq('tenant_id', tenantId)
+            .maybeSingle();
+
+          const prevQty = existingLevel?.quantity_on_hand || 0;
+          const committed = existingLevel?.quantity_committed || 0;
+          const newQty = prevQty + item.quantity;
+
+          if (existingLevel) {
+            await supabase.from('inventory_levels').update({
+              quantity_on_hand: newQty,
+              quantity_available: newQty - committed,
+              updated_at: now,
+            }).eq('id', existingLevel.id);
+          } else {
+            await supabase.from('inventory_levels').insert({
+              tenant_id: tenantId,
+              store_id: storeId,
+              product_variant_id: item.variant_id,
+              quantity_on_hand: item.quantity,
+              quantity_committed: 0,
+              quantity_available: item.quantity,
+            });
+          }
+
+          // ── Log inventory movement ──
+          await supabase.from('inventory_movements').insert({
+            tenant_id: tenantId,
+            store_id: storeId,
+            product_variant_id: item.variant_id,
+            movement_type: 'receiving',
+            quantity: item.quantity,
+            reference_type: 'purchase_order',
+            reference_id: item.po_id,
+            performed_by: currentUserId,
+            balance_after: newQty,
+            notes: `Received on PO ${item.po_number}`,
+          });
+
           itemsReceived += item.quantity;
+
         }
 
         // Recalculate PO status
@@ -805,15 +871,59 @@ export default function ReceivingClient() {
               .select()
               .single();
 
-            if (lineItem) {
+                        if (lineItem) {
               await supabase.from('receiving_history').insert({
                 po_item_id: lineItem.id,
                 quantity_received: item.quantity,
                 received_at: now,
                 received_by: receivedBy,
               });
+
+              // ── Update inventory_levels (Quick PO) ──
+              const { data: existingLevel2 } = await supabase
+                .from('inventory_levels')
+                .select('id, quantity_on_hand, quantity_committed')
+                .eq('product_variant_id', item.variant_id)
+                .eq('tenant_id', tenantId)
+                .maybeSingle();
+
+              const prevQty2 = existingLevel2?.quantity_on_hand || 0;
+              const committed2 = existingLevel2?.quantity_committed || 0;
+              const newQty2 = prevQty2 + item.quantity;
+
+              if (existingLevel2) {
+                await supabase.from('inventory_levels').update({
+                  quantity_on_hand: newQty2,
+                  quantity_available: newQty2 - committed2,
+                  updated_at: now,
+                }).eq('id', existingLevel2.id);
+              } else {
+                await supabase.from('inventory_levels').insert({
+                  tenant_id: tenantId,
+                  store_id: null,
+                  product_variant_id: item.variant_id,
+                  quantity_on_hand: item.quantity,
+                  quantity_committed: 0,
+                  quantity_available: item.quantity,
+                });
+              }
+
+              // ── Log inventory movement (Quick PO) ──
+              await supabase.from('inventory_movements').insert({
+                tenant_id: tenantId,
+                store_id: null,
+                product_variant_id: item.variant_id,
+                movement_type: 'receiving',
+                quantity: item.quantity,
+                reference_type: 'purchase_order',
+                reference_id: newPO.id,
+                performed_by: currentUserId,
+                balance_after: newQty2,
+                notes: `Received on Quick PO ${newPO.po_number}`,
+              });
             }
             itemsReceived += item.quantity;
+
           }
           posUpdated.add(newPO.id);
         }

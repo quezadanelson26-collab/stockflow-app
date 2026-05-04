@@ -289,16 +289,29 @@ export default function CycleCountsClient({
           balance_after: counted,
         });
 
+                // Fetch current committed qty to recalculate available
+        const { data: currentLevel } = await supabase
+          .from('inventory_levels')
+          .select('quantity_committed')
+          .eq('tenant_id', tenantId)
+          .eq('store_id', selectedCount.store_id)
+          .eq('product_variant_id', item.product_variant_id)
+          .maybeSingle();
+
+        const committedQty = currentLevel?.quantity_committed || 0;
+
         await supabase
           .from('inventory_levels')
           .update({
             quantity_on_hand: counted,
+            quantity_available: counted - committedQty,
             updated_at: new Date().toISOString(),
             last_counted_at: new Date().toISOString(),
           })
           .eq('tenant_id', tenantId)
           .eq('store_id', selectedCount.store_id)
           .eq('product_variant_id', item.product_variant_id);
+
       }
     }
 
