@@ -13,7 +13,13 @@ export function createClient() {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options as any)
             );
-          } catch {}
+          } catch (error) {
+  // Expected in Server Components — middleware handles session refresh.
+  if (process.env.NODE_ENV === 'development') {
+    console.warn('Supabase cookie setAll warning:', error);
+  }
+}
+
         },
       },
     }
