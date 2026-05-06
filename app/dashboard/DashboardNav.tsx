@@ -15,7 +15,11 @@ const settingsItems = [
   { label: "Users", href: "/dashboard/settings/users" },
 ];
 
-export default function DashboardNav() {
+interface DashboardNavProps {
+  userEmail: string;
+}
+
+export default function DashboardNav({ userEmail }: DashboardNavProps) {
   const pathname = usePathname();
 
   const linkClass = (href: string) =>
@@ -43,6 +47,10 @@ export default function DashboardNav() {
           {item.label}
         </Link>
       ))}
+
+      <div className="mt-auto px-4 py-3 text-xs text-gray-400 truncate">
+        {userEmail}
+      </div>
     </nav>
   );
 }
